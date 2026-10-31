@@ -16,6 +16,13 @@ public enum DioramaPackets {
     return data
   }
 
+  /// What the networks are doing (preparing, running, paused, off and why), as UTF-8: live only.
+  public static func status(_ text: String) -> Data {
+    var data = Data("T".utf8)
+    data.append(Data(text.utf8))
+    return data
+  }
+
   /// u32 frame, f32 seconds, f32 model ms, then the floats.
   public static func drive(frame: UInt32, seconds: Float, modelMs: Float, values: [Float]) -> Data {
     var data = Data(capacity: 13 + 4 * values.count)

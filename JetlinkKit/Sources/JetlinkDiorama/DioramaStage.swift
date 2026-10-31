@@ -49,6 +49,10 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       self.meta = meta
       self.seg = folder.appending(path: seg)
       self.dd3d = ((meta["dd3d"] as? [String: Any])?["file"] as? String).map { folder.appending(path: $0) }
+      // a missing graph is found here, not minutes later behind the backend's error
+      for graph in [self.seg, self.dd3d].compactMap({ $0 }) where !FileManager.default.fileExists(atPath: graph.path) {
+        throw DioramaError("\(url.path) names \(graph.lastPathComponent), which is not in \(folder.path)")
+      }
     }
   }
 
@@ -129,13 +133,14 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
 
   // MARK: watchers
 
-  /// A new watcher, its queue starting with the meta message.
+  /// A new watcher, its queue starting with the meta message and the networks' status.
   public func watch() -> Watcher {
     let w = Watcher()
     let meta = DioramaPackets.meta(metaInfo())
     watchLock.lock()
     watchers[ObjectIdentifier(w)] = w
     w.queue.append(meta)
+    w.queue.append(DioramaPackets.status(status))
     watchLock.unlock()
     frameLock.lock()
     watching += 1
@@ -230,7 +235,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       for d in pending {
         broadcast(DioramaPackets.drive(frame: d.frame, seconds: Float(d.frame) / 20, modelMs: d.ms, values: d.values))
       }
-      if paused { setStatus("paused: the driving model ran slow") }
+      // a pause does not stop a build, and must not hide why the networks never run
+      if paused && !preparingOrFailed { setStatus("paused: the driving model ran slow") }
       guard let frame, let nets = engines() else { continue }
       setStatus("running")
       if let message = run(nets.seg, frame, { segMessage($0, frameID, $1) }) {
@@ -283,7 +289,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       preparing = false
       engineLock.unlock()
       log.error("cannot run the networks: \(error)")
-      setStatus("off: \(error)")
+      // the page has one line for it: the graphs by name, the folder is in the log
+      setStatus("off: " + "\(error)".replacingOccurrences(of: networks.folder.path + "/", with: ""))
     }
   }
 
@@ -348,10 +355,21 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     watchLock.unlock()
   }
 
+  private var preparingOrFailed: Bool {
+    engineLock.lock()
+    defer { engineLock.unlock() }
+    return preparing || loadFailed
+  }
+
+  /// The status, and to every watcher when it changes.
   private func setStatus(_ s: String) {
     watchLock.lock()
+    defer { watchLock.unlock() }
+    guard s != status else { return }
     status = s
-    watchLock.unlock()
+    let message = DioramaPackets.status(s)
+    for w in watchers.values where !w.closed && !w.dropped && w.queue.count < limits.behind { w.queue.append(message) }
+    watchLock.broadcast()
   }
 
   /// The meta message: the frame's camera and the networks' classes from

@@ -105,7 +105,17 @@ struct DioramaStageTests {
       "dd3d": ["file": "diorama_dd3d.onnx", "classes": ["Car"], "columns": []],
     ]
     try JSONSerialization.data(withJSONObject: meta).write(to: dir.appending(path: "diorama.json"))
+    for graph in ["diorama_seg.onnx", "diorama_dd3d.onnx"] { try Data().write(to: dir.appending(path: graph)) }
     return try DioramaStage.Networks(folder: dir)
+  }
+
+  @Test("A folder without the graphs diorama.json names is refused, naming the one missing")
+  func missingGraph() throws {
+    let dir = try networks().folder
+    try FileManager.default.removeItem(at: dir.appending(path: "diorama_dd3d.onnx"))
+    #expect {
+      try DioramaStage.Networks(folder: dir)
+    } throws: { "\($0)".contains("diorama_dd3d.onnx, which is not in") }
   }
 
   func serve(_ stage: DioramaStage, frame: UInt32, pixel: UInt8 = 9, totalUs: UInt32 = 20_000) {
@@ -182,6 +192,29 @@ struct DioramaStageTests {
     #expect(got.filter { $0.first == UInt8(ascii: "D") }.count == 6)
     #expect(!got.contains { $0.first == UInt8(ascii: "S") })
     #expect(stage.state.hasPrefix("preparing"))
+  }
+
+  @Test("A watcher hears why the networks are off, and a pause does not hide it")
+  func offSaysWhy() throws {
+    struct Missing: Error, CustomStringConvertible { var description: String { "File doesn't exist" } }
+    let stage = DioramaStage(networks: try networks()) { _, _, _ in throw Missing() }
+    stage.start()
+    defer { stage.stop() }
+    let w = stage.watch()
+    serve(stage, frame: 0)
+    Thread.sleep(forTimeInterval: 0.2)
+    serve(stage, frame: 2, totalUs: 55_000)
+    serve(stage, frame: 4)
+    let got = collect(stage, w, 8)
+    let statuses = got.filter { $0.first == UInt8(ascii: "T") }.map { String(decoding: $0.dropFirst(), as: UTF8.self) }
+    #expect(statuses.first == "idle")
+    #expect(statuses.last == "off: File doesn't exist")
+    #expect(stage.state == "off: File doesn't exist")
+    #expect(got.filter { $0.first == UInt8(ascii: "D") }.count == 3)
+    // a page that opens later hears it straight away
+    let later = stage.watch()
+    let first = collect(stage, later, 2)
+    #expect(first.last.map { String(decoding: $0.dropFirst(), as: UTF8.self) } == "off: File doesn't exist")
   }
 
   @Test("A slow driving frame pauses the networks")

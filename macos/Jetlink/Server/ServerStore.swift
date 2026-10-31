@@ -2,8 +2,10 @@ import Foundation
 import JetlinkDiorama
 import JetlinkKit
 import JetlinkORT
+import JetlinkRegistry
 import JetlinkServer
 import Observation
+import Synchronization
 import os
 
 /// What the running server is, for Status and the menu bar: the choice it
@@ -191,6 +193,81 @@ final class ServerStore: ServerControlling {
     } catch {
       dioramaProblem = "\(error)"
     }
+  }
+
+  // MARK: Diorama's networks
+
+  enum DioramaDownload: Equatable {
+    case idle
+    /// Asking the repo what there is to fetch.
+    case checking
+    /// The user agrees to the licenses and the size first.
+    case confirm(bytes: Int64)
+    case downloading(Double)
+    case failed(String)
+  }
+
+  private(set) var dioramaDownload: DioramaDownload = .idle
+  @ObservationIgnored private var dioramaPlan: DioramaNetworks.Plan?
+  @ObservationIgnored private var dioramaTask: Task<Void, Never>?
+  @ObservationIgnored private var dioramaStop = StopFlag()
+
+  /// Looks up the networks' files and sizes, then waits for `downloadDiorama()`.
+  func checkDiorama() {
+    guard dioramaTask == nil else { return }
+    dioramaDownload = .checking
+    dioramaTask = Task { [weak self] in
+      do {
+        // a mirror with Hugging Face's layout, for testing: -dioramaNetworksHost http://...
+        let host = UserDefaults.standard.string(forKey: "dioramaNetworksHost") ?? DioramaNetworks.defaultHost
+        let plan = try await DioramaNetworks.plan(host: host)
+        self?.dioramaPlan = plan
+        self?.dioramaDownload = .confirm(bytes: plan.bytes)
+      } catch {
+        self?.dioramaDownload = .failed((error as? RegistryError)?.message ?? "\(error)")
+      }
+      self?.dioramaTask = nil
+    }
+  }
+
+  /// Into the Diorama folder, then on the running server at once: no restart.
+  func downloadDiorama() {
+    guard dioramaTask == nil, let plan = dioramaPlan else { return }
+    let folder = settings.dioramaFolder
+    let stop = StopFlag()
+    dioramaStop = stop
+    dioramaDownload = .downloading(0)
+    dioramaTask = Task { [weak self] in
+      do {
+        try await DioramaNetworks.fetch(
+          plan, into: folder,
+          progress: { fraction in
+            // each hop is a task of its own, so they may land out of order: the bar only grows
+            Task { @MainActor in if case .downloading(let shown) = self?.dioramaDownload, fraction > shown { self?.dioramaDownload = .downloading(fraction) } }
+          },
+          shouldStop: { stop.isSet })
+        self?.dioramaDownload = .idle
+        self?.dioramaPlan = nil
+        if let self, let embedded = self.embedded, self.diorama == nil { self.attachDiorama(embedded) }
+      } catch let error as RegistryError where error.kind == .cancelled {
+        self?.dioramaDownload = .idle
+      } catch {
+        self?.dioramaDownload = .failed((error as? RegistryError)?.message ?? "\(error)")
+      }
+      self?.dioramaTask = nil
+    }
+  }
+
+  func cancelDioramaDownload() {
+    dioramaStop.set()
+    if case .confirm = dioramaDownload { dioramaDownload = .idle }
+  }
+
+  /// Asked between a download's chunks, set from the main actor.
+  private final class StopFlag: Sendable {
+    private let value = Atomic<Bool>(false)
+    var isSet: Bool { value.load(ordering: .relaxed) }
+    func set() { value.store(true, ordering: .relaxed) }
   }
 
   private func tearDown() {

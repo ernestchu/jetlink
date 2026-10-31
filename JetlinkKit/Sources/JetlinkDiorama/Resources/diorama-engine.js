@@ -75,6 +75,7 @@
     const kind = String.fromCharCode(dv.getUint8(0));
     const u8 = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
     if (kind === 'M') return { kind, meta: JSON.parse(new TextDecoder().decode(u8.subarray(1))) };
+    if (kind === 'T') return { kind, text: new TextDecoder().decode(u8.subarray(1)) };
     if (kind === 'D') {
       const n = (dv.byteLength - 13) / 4;
       const values = new Float32Array(n);
