@@ -197,7 +197,7 @@
     $('inputLabel').textContent = `model input · ${W}×${H} · frame ${msg.frame}`;
   }
 
-  // the toggle: remembered here, and the source asks the server for the frames only while it is on
+  // the toggle, on the web page only: remembered here, and the source asks the server for the frames only while it is on
   function inputToggle(ask) {
     let on = false;
     try { on = localStorage.getItem('diorama.input') === '1'; } catch (e) { /* storage off */ }
@@ -302,9 +302,7 @@
   function bridgeSource() {
     window.Diorama = { push: (s) => take(b64(s)), pushAll: (list) => list.forEach((s) => take(b64(s))), reset: () => engine.reset() };
     wait('Waiting for the comma…');
-    const post = (m) => { try { window.webkit.messageHandlers.diorama.postMessage(m); } catch (e) { /* not in the app */ } };
-    post('ready');
-    if (inputToggle((on) => post(on ? 'input:on' : 'input:off'))) post('input:on');
+    try { window.webkit.messageHandlers.diorama.postMessage('ready'); } catch (e) { /* not in the app */ }
     return { tick() { wait(performance.now() - lastData < 2000 ? '' : 'Waiting for the comma…'); } };
   }
 
