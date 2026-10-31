@@ -36,6 +36,7 @@
 		C5BD297534DB35414E8EE4A4 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C8A278FA961C026335DCFD8 /* LogsView.swift */; };
 		C97C593B2028CC112617A42C /* JetlinkORT in Frameworks */ = {isa = PBXBuildFile; productRef = 278B898DF1DED4B7671FF5F5 /* JetlinkORT */; };
 		B834E63C4C55A0C8AE9CDBCF /* JetlinkDiorama in Frameworks */ = {isa = PBXBuildFile; productRef = E527F85ED56A50C589C83CF5 /* JetlinkDiorama */; };
+		1B8F6F332370FA830F07D12A /* JetlinkRegistry in Frameworks */ = {isa = PBXBuildFile; productRef = F7F85B2240F77D346BBF731C /* JetlinkRegistry */; };
 		D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */ = {isa = PBXBuildFile; productRef = 95031BC76E32EFCF41AB88C6 /* JetlinkUI */; };
 		E2541FEB05BB69B0D4ED86FD /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B668BFB7A68D7E8F0B5F93E2 /* ActivityView.swift */; };
 		E3E5E81C9DDEEE6634A62A34 /* BenchmarkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95935759392B054144F7DC96 /* BenchmarkView.swift */; };
@@ -93,6 +94,7 @@
 				BC2C8BEE97C8C36333DCE538 /* JetlinkServer in Frameworks */,
 				C97C593B2028CC112617A42C /* JetlinkORT in Frameworks */,
 				B834E63C4C55A0C8AE9CDBCF /* JetlinkDiorama in Frameworks */,
+				1B8F6F332370FA830F07D12A /* JetlinkRegistry in Frameworks */,
 				C5A26CB41E0083A447B027D2 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -245,6 +247,7 @@
 				18188F707063EC9D73EC6510 /* JetlinkServer */,
 				278B898DF1DED4B7671FF5F5 /* JetlinkORT */,
 				E527F85ED56A50C589C83CF5 /* JetlinkDiorama */,
+				F7F85B2240F77D346BBF731C /* JetlinkRegistry */,
 				44FD00D75D4A6091AC78684E /* Sparkle */,
 			);
 			productName = Jetlink;
@@ -648,6 +651,10 @@
 		E527F85ED56A50C589C83CF5 /* JetlinkDiorama */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JetlinkDiorama;
+		};
+		F7F85B2240F77D346BBF731C /* JetlinkRegistry */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JetlinkRegistry;
 		};
 		44FD00D75D4A6091AC78684E /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;

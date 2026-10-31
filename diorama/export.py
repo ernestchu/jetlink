@@ -106,10 +106,76 @@ def _float32_reference_points(net):
   encoder.get_reference_points = reference_points
 
 
+def _rank5_swin_windows():
+  """Swin's window partition and reverse without a 6-D tensor: the batch and
+  the row of windows sit side by side, so they merge into one axis and the
+  result is the same. onnxruntime's CoreML provider takes no Reshape past
+  rank 5, and every 6-D one cut the graph, 85 pieces with a CPU hop between
+  each, so the segmentation ran no faster on the GPU than on the CPU."""
+  from transformers.models.swin import modeling_swin
+
+  def window_partition(x, window_size):
+    batch_size, height, width, num_channels = x.shape
+    x = x.reshape(batch_size * (height // window_size), window_size, width // window_size, window_size, num_channels)
+    return x.transpose(1, 2).contiguous().view(-1, window_size, window_size, num_channels)
+
+  def window_reverse(windows, window_size, height, width):
+    num_channels = windows.shape[-1]
+    windows = windows.view(-1, width // window_size, window_size, window_size, num_channels)
+    return windows.transpose(1, 2).contiguous().view(-1, height, width, num_channels)
+
+  modeling_swin.window_partition = window_partition
+  modeling_swin.window_reverse = window_reverse
+
+
+def _rank5_deformable_attention():
+  """The pixel decoder's deformable attention without a 6-D tensor, for the
+  same reason as the Swin windows: its sampling offsets and locations were
+  (batch, query, head, level, point, 2). Batch and query sit side by side
+  and merge, and the arithmetic is unchanged. Only 2-D reference points,
+  which `_float32_reference_points` makes them."""
+  torch, nn = _torch()
+  from transformers.models.mask2former import modeling_mask2former
+
+  def forward(self, hidden_states, attention_mask=None, encoder_hidden_states=None, encoder_attention_mask=None,
+              position_embeddings=None, reference_points=None, spatial_shapes_list=None, level_start_index=None,
+              output_attentions=False):
+    if position_embeddings is not None:
+      hidden_states = self.with_pos_embed(hidden_states, position_embeddings)
+    batch_size, num_queries, _ = hidden_states.shape
+    _, sequence_length, _ = encoder_hidden_states.shape
+    heads, levels, points = self.n_heads, self.n_levels, self.n_points
+    hidden_dim = self.d_model // heads
+    value = self.value_proj(encoder_hidden_states)
+    if attention_mask is not None:
+      value = value.masked_fill(attention_mask[..., None], float(0))
+    value = value.view(batch_size, sequence_length, heads, hidden_dim)
+    offsets = self.sampling_offsets(hidden_states).view(batch_size * num_queries, heads, levels, points, 2)
+    weights = nn.functional.softmax(self.attention_weights(hidden_states).view(batch_size, num_queries, heads, levels * points), -1)
+    normalizer = torch.tensor([[w, h] for h, w in spatial_shapes_list], dtype=torch.float32, device=offsets.device)
+    grids = 2 * (reference_points.reshape(batch_size * num_queries, 1, levels, 1, 2) + offsets / normalizer.view(1, 1, levels, 1, 2)) - 1
+
+    values = value.split([h * w for h, w in spatial_shapes_list], dim=1)
+    sampled = []
+    for level, (height, width) in enumerate(spatial_shapes_list):
+      value_l = values[level].flatten(2).transpose(1, 2).reshape(batch_size * heads, hidden_dim, height, width)
+      # a slice, not an index: an index exports as a Gather, which CoreML does not take
+      grid_l = grids[:, :, level:level + 1].reshape(batch_size, num_queries, heads, points, 2).transpose(1, 2).flatten(0, 1)
+      sampled.append(nn.functional.grid_sample(value_l, grid_l, mode='bilinear', padding_mode='zeros', align_corners=False))
+    weights_bh = weights.transpose(1, 2).reshape(batch_size * heads, 1, num_queries, levels * points)
+    output = (torch.stack(sampled, dim=-2).flatten(-2) * weights_bh).sum(-1).view(batch_size, heads * hidden_dim, num_queries)
+    output = self.output_proj(output.transpose(1, 2).contiguous())
+    return output, weights.view(batch_size, num_queries, heads, levels, points)
+
+  modeling_mask2former.Mask2FormerPixelDecoderEncoderMultiscaleDeformableAttention.forward = forward
+
+
 def seg_module(model_id: str = SEG_MODEL):
   torch, nn = _torch()
   from transformers import Mask2FormerForUniversalSegmentation
 
+  _rank5_swin_windows()
+  _rank5_deformable_attention()
   net = Mask2FormerForUniversalSegmentation.from_pretrained(model_id).eval()
   _float32_reference_points(net)
   labels = {int(k): v for k, v in net.config.id2label.items()}

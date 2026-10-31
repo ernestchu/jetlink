@@ -1,4 +1,6 @@
 import JetlinkDiorama
+import JetlinkRegistry
+import JetlinkServer
 import SwiftUI
 import WebKit
 
@@ -16,19 +18,100 @@ struct DioramaView: View {
       ContentUnavailableView {
         Label("Diorama is off", systemImage: "cube.transparent")
       } description: {
-        if server.runState != .serving {
-          Text("Start the server to see the drive.")
-        } else {
-          Text(
-            "Diorama needs its networks in \(settings.dioramaFolder.path(percentEncoded: false)). Export them on a computer with PyTorch with `python -m diorama export --out <folder>`, choose the folder in Settings, and restart the server."
-          )
+        switch server.dioramaDownload {
+        case .downloading(let fraction):
+          ProgressView(value: fraction) {
+            Text("Downloading Diorama's networks…")
+          } currentValueLabel: {
+            Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+          }
+          .frame(maxWidth: 320)
+        case .failed(let message):
+          Text("The networks did not download: \(message)")
+        default:
+          if hasNetworks {
+            Text(server.runState == .serving ? "Restart the server to load the networks." : "Start the server to see the drive.")
+          } else {
+            Text(
+              "Diorama draws the drive with two networks, about 1.3 GB, that run on the GPU only while this view is open. Download them into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported them to in Settings."
+            )
+          }
+          if hasNetworks, let problem = server.dioramaProblem {
+            Text(problem).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+          }
         }
       } actions: {
-        if server.runState == .serving {
+        switch server.dioramaDownload {
+        case .downloading:
+          Button("Cancel") { server.cancelDioramaDownload() }
+        case .checking:
+          ProgressView().controlSize(.small)
+        case .failed:
+          Button("Try Again") { server.checkDiorama() }
+        default:
+          if !hasNetworks {
+            Button("Download Networks…") { server.checkDiorama() }.buttonStyle(.borderedProminent)
+          }
           SettingsLink { Text("Open Settings") }
         }
       }
+      .sheet(isPresented: confirming) {
+        if case .confirm(let bytes) = server.dioramaDownload {
+          DioramaLicenseSheet(bytes: bytes, folder: settings.dioramaFolder) { agreed in
+            if agreed { server.downloadDiorama() } else { server.cancelDioramaDownload() }
+          }
+        }
+      }
     }
+  }
+
+  /// diorama.json is written last, so its being there means the graphs are too.
+  private var hasNetworks: Bool {
+    FileManager.default.fileExists(atPath: settings.dioramaFolder.appending(path: DioramaNetworks.manifest).path(percentEncoded: false))
+  }
+
+  private var confirming: Binding<Bool> {
+    Binding {
+      if case .confirm = server.dioramaDownload { true } else { false }
+    } set: { shown in
+      if !shown { server.cancelDioramaDownload() }
+    }
+  }
+}
+
+/// Before 1.3 GB comes down: what it is, where it goes, and whose terms it comes under.
+struct DioramaLicenseSheet: View {
+  let bytes: Int64
+  let folder: URL
+  let answer: (Bool) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text("Download Diorama's networks?").font(.headline)
+      Text(
+        "\(bytes.formatted(.byteCount(style: .file))) from huggingface.co/\(DioramaNetworks.repo), into \(folder.path(percentEncoded: false))."
+      )
+      .fixedSize(horizontal: false, vertical: true)
+      VStack(alignment: .leading, spacing: 8) {
+        Text("**Segmentation:** Mask2Former by Meta. Its code is under the MIT License; its weights were trained on Mapillary Vistas, whose terms allow non-commercial use only.")
+          .fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 14) {
+          Link("Mask2Former", destination: URL(string: "https://huggingface.co/facebook/mask2former-swin-large-mapillary-vistas-panoptic")!)
+          Link("Mapillary Vistas terms", destination: URL(string: "https://www.mapillary.com/dataset/vistas")!)
+        }
+        Text("**Headings:** DD3D by Toyota Research Institute, code and weights under the MIT License.")
+          .fixedSize(horizontal: false, vertical: true)
+        Link("DD3D", destination: URL(string: "https://github.com/TRI-ML/dd3d")!)
+      }
+      .font(.callout)
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { answer(false) }.keyboardShortcut(.cancelAction)
+        Button("Agree and Download") { answer(true) }.keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(20)
+    .frame(width: 460)
   }
 }
 
@@ -45,7 +128,14 @@ struct DioramaWebView: NSViewRepresentable {
     let configuration = WKWebViewConfiguration()
     configuration.setURLSchemeHandler(PageFiles(), forURLScheme: DioramaWebView.scheme)
     configuration.userContentController.add(context.coordinator, name: "diorama")
+    // the page's own errors, into the server's log beside the stage's
+    configuration.userContentController.addUserScript(
+      WKUserScript(
+        source: """
+          addEventListener('error', (e) => { try { webkit.messageHandlers.diorama.postMessage('error: ' + e.message + ' at ' + e.lineno); } catch (_) {} });
+          """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
     let view = WKWebView(frame: .zero, configuration: configuration)
+    view.navigationDelegate = context.coordinator
     context.coordinator.webView = view
     view.load(URLRequest(url: URL(string: "\(DioramaWebView.scheme)://page/diorama.html?bridge=1")!))
     return view
@@ -67,7 +157,7 @@ struct DioramaWebView: NSViewRepresentable {
 
   /// Watches the stage while the page is up, and hands it the messages in batches.
   @MainActor
-  final class Coordinator: NSObject, WKScriptMessageHandler {
+  final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var stage: DioramaStage
     weak var webView: WKWebView?
     private var watcher: DioramaStage.Watcher?
@@ -76,7 +166,20 @@ struct DioramaWebView: NSViewRepresentable {
     init(stage: DioramaStage) { self.stage = stage }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-      if message.body as? String == "ready" { start() }
+      guard let body = message.body as? String else { return }
+      if body == "ready" {
+        start()
+      } else if body.hasPrefix("error: ") {
+        Log.write(.warning, "diorama", "the page: \(body.dropFirst(7))")
+      }
+    }
+
+    /// WebKit ended the page's process (out of memory, or it crashed): a white
+    /// view until something reloads it, so this does.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+      Log.write(.warning, "diorama", "the page's web process ended; reloading it")
+      stop()
+      webView.reload()
     }
 
     /// From the stage's meta on: a page that reloads asks again.

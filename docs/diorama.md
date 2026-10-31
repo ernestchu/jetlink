@@ -129,14 +129,35 @@ jetlink-server --usb --backend trt --status-port 5600 --diorama /mnt/data/dioram
 
 ## Mac
 
-1. Export the networks somewhere ([above](#export-the-networks)).
-2. Choose that folder in **Settings > General > Diorama**.
-3. Restart the server.
+Open **Diorama** in the sidebar (⌘5) and click **Download Networks…**. The app
+names the networks' licenses and their size, and on **Agree and Download**
+fetches them from [`ernestchu/jetlink-diorama`](https://huggingface.co/ernestchu/jetlink-diorama)
+on Hugging Face into **Settings > General > Diorama**'s folder. Each graph is
+checked against the repo's SHA-256 as it arrives, and the running server picks
+them up without a restart. A download stopped part way keeps the graphs it
+finished.
 
-**Diorama** in the sidebar (⌘5) then shows the drive. The networks run through
+To use networks you exported yourself ([above](#export-the-networks)), choose
+their folder in **Settings > General > Diorama** and restart the server.
+
+**Diorama** then shows the drive. The networks run through
 CoreML on the GPU, so the Neural Engine stays the driving model's. CoreML
 compiles them the first time the view opens, which takes a few minutes; the
 compile is kept in the cache folder's `diorama/`.
+
+### Publish the networks for the app
+
+The Mac app downloads what `ernestchu/jetlink-diorama` holds: `diorama.json`
+and the graphs it names, from the repo's `main`. After an export, upload the
+folder as it is, with the licenses above on the model card:
+
+```bash
+hf upload ernestchu/jetlink-diorama ~/diorama-networks . --repo-type model
+```
+
+The app reads each graph's SHA-256 and size from the repo's file listing, so
+nothing else needs updating. A new export replaces the graphs on the next
+download; a Mac that has the old ones keeps them until its folder is emptied.
 
 ## What it costs
 
@@ -145,7 +166,9 @@ compile is kept in the cache folder's `diorama/`.
 | RTX 4090, TensorRT fp16 | 5.0 ms | 3.0 ms | outputs match onnxruntime fp32 on 99.2% of pixels; boxes within 8 cm |
 | RTX 4090, onnxruntime CUDA | 23 ms | 13 ms | `python -m diorama run` |
 | CPU (onnxruntime) | 685 ms | 322 ms | works, at a few frames a second |
-| Jetson Orin, Mac | not measured yet | | |
+| M5 Pro Mac, CoreML on the GPU | 185 ms | 43 ms | the app: segmentation at about 5 Hz; the driving model's p99 rose from 14 to 22 ms while they ran, with no slow frames. CoreML's first compile takes about 2 minutes |
+| M5 Pro Mac, onnxruntime CPU | 275 ms | 159 ms | |
+| Jetson Orin | not measured yet | | |
 
 The page's engine takes about 3 ms of a browser frame (5–7 ms at the 95th
 percentile, 22 ms at most when it re-cuts crosswalk stripes).
@@ -174,6 +197,7 @@ stream, each is one base64 `data:` line.
 | `D` drive | u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs |
 | `S` seg | u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] class (255 dropped), u8[queries] score × 255, u32 runs, then (u8 query, u8 length − 1) per run |
 | `B` boxes | u32 frame, f32 ms, u16 rows, f32[rows × 16] DD3D rows (`diorama/export.py` names the columns) |
+| `T` status | UTF-8: what the networks are doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only: the page shows it beside the timings when they are not running |
 
 `diorama/packets.py` writes them and diorama-engine.js reads them.
 `DioramaPackets.swift` matches the Python byte for byte, which

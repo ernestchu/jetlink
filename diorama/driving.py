@@ -31,7 +31,9 @@ def providers(device: str) -> list[str]:
     raise SystemExit(f"onnxruntime here has no {', '.join(missing)} (it has {', '.join(have)})")
   if 'CUDAExecutionProvider' in want and hasattr(ort, 'preload_dlls'):
     ort.preload_dlls()  # CUDA and cuDNN from their pip wheels (torch's), which onnxruntime does not look for by itself
-  return [*want, 'CPUExecutionProvider']
+  # CoreML as the Mac app runs it: an MLProgram. The default NeuralNetwork format cannot compile Mask2Former's slices.
+  coreml = ('CoreMLExecutionProvider', {'ModelFormat': 'MLProgram'})
+  return [coreml if p == 'CoreMLExecutionProvider' else p for p in want] + ['CPUExecutionProvider']
 
 
 class DrivingModel:
