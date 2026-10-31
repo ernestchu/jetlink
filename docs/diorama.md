@@ -64,6 +64,14 @@ This writes three files, about 1.3 GB:
 DD3D's weights are downloaded from TRI's release; `--dd3d-weights FILE` uses a
 copy you have. `--no-dd3d` leaves DD3D out, and cars then face along their lane.
 
+**Or download them** from the export the Mac app uses, without PyTorch. A
+Jetson or Linux PC needs only the ONNX graphs, not the CoreML packages, and
+each pattern takes its own `--include`:
+
+```bash
+hf download ernestchu/jetlink-diorama --include "*.onnx" --include diorama.json --local-dir ~/diorama-models
+```
+
 **For a Mac,** add `--coreml`. It also writes both models as native CoreML
 packages, `diorama_seg.mlpackage` (513 MB) and `diorama_dd3d.mlpackage`
 (208 MB), which the Mac app and `jetlink-server` on a Mac run instead of the
@@ -179,7 +187,7 @@ download; a Mac that has the old ones keeps them until its folder is emptied.
 
 | Host | Segmentation | DD3D | Notes |
 | --- | ---: | ---: | --- |
-| RTX 4090, TensorRT fp16 | 5.0 ms | 3.0 ms | outputs match onnxruntime fp32 on 99.2% of pixels; boxes within 8 cm |
+| RTX 4090, TensorRT fp16 | 5.0 ms | 3.0 ms | outputs match onnxruntime fp32 on 99.5% of pixels (98.2% at worst over 8 frames); boxes within 7 cm at the 95th percentile, 0.4% of their range at worst (21 cm at 59 m) |
 | RTX 4090, onnxruntime CUDA | 23 ms | 13 ms | `python -m diorama run` |
 | CPU (onnxruntime) | 685 ms | 322 ms | works, at a few frames a second |
 | M5 Pro Mac, native CoreML on the GPU | 53 ms | 17 ms | the app (`--coreml`): the driving model's p99 rose from 14 to 15 ms while they ran. Query map matches the ONNX graph on 99.9% of pixels; boxes within 5 cm |
