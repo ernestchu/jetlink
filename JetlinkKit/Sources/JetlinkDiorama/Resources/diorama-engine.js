@@ -76,6 +76,10 @@
     const u8 = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
     if (kind === 'M') return { kind, meta: JSON.parse(new TextDecoder().decode(u8.subarray(1))) };
     if (kind === 'T') return { kind, text: new TextDecoder().decode(u8.subarray(1)) };
+    if (kind === 'I') {
+      const w = dv.getUint16(5, true), h = dv.getUint16(7, true), planes = dv.getUint8(9);
+      return { kind, frame: dv.getUint32(1, true), w, h, packed: u8.subarray(10, 10 + w * h * planes) };
+    }
     if (kind === 'D') {
       const n = (dv.byteLength - 13) / 4;
       const values = new Float32Array(n);

@@ -217,6 +217,28 @@ struct DioramaStageTests {
     #expect(first.last.map { String(decoding: $0.dropFirst(), as: UTF8.self) } == "off: File doesn't exist")
   }
 
+  @Test("Only a watcher that asks gets the frames the models see, paused or not")
+  func input() throws {
+    var limits = DioramaStage.Limits()
+    limits.backOff = 30
+    let stage = DioramaStage(models: try models(), limits: limits) { _, name, _ in try FakeModel(boxes: name == "dd3d") }
+    stage.start()
+    defer { stage.stop() }
+    let plain = stage.watch(), debug = stage.watch(input: true)
+    serve(stage, frame: 0, pixel: 77, totalUs: 55_000)  // slow: the models pause, the view still sees the frame
+    let shown = collect(stage, debug, 4).filter { $0.first == UInt8(ascii: "I") }
+    let message = try #require(shown.first)
+    #expect(message.count == 10 + 6 * 128 * 256)
+    #expect(Array(message[1..<10]) == [0, 0, 0, 0, 0, 1, 128, 0, 6])  // frame 0, 256 by 128, 6 planes
+    #expect(message.dropFirst(10).allSatisfy { $0 == 77 })
+    #expect(!collect(stage, plain, 4).contains { $0.first == UInt8(ascii: "I") })
+    stage.showInput(debug, false)
+    stage.showInput(plain, true)
+    serve(stage, frame: 2)
+    #expect(collect(stage, plain, 3).contains { $0.first == UInt8(ascii: "I") })
+    #expect(!collect(stage, debug, 3).contains { $0.first == UInt8(ascii: "I") })
+  }
+
   @Test("A slow driving frame pauses the models")
   func backsOff() throws {
     let seg = try FakeModel(boxes: false)

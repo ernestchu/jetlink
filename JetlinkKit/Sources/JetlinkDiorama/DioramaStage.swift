@@ -73,6 +73,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     fileprivate var queue: [Data] = []
     fileprivate var dropped = false
     fileprivate var closed = false
+    /// It also wants the frames the models see (`input` messages), a debug view's.
+    fileprivate var input = false
   }
 
   public let models: Models
@@ -140,9 +142,11 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
 
   // MARK: watchers
 
-  /// A new watcher, its queue starting with the meta message and the models' status.
-  public func watch() -> Watcher {
+  /// A new watcher, its queue starting with the meta message and the models'
+  /// status. `input`: the frames the models see as well (`showInput`).
+  public func watch(input: Bool = false) -> Watcher {
     let w = Watcher()
+    w.input = input
     let meta = DioramaPackets.meta(metaInfo())
     watchLock.lock()
     watchers[ObjectIdentifier(w)] = w
@@ -154,6 +158,14 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     frameLock.unlock()
     wake.signal()
     return w
+  }
+
+  /// Whether `w` also gets the frames the models see: the packed narrow
+  /// frame, 196 KB ten times a second, so only while a debug view shows it.
+  public func showInput(_ w: Watcher, _ on: Bool) {
+    watchLock.lock()
+    w.input = on
+    watchLock.unlock()
   }
 
   public func unwatch(_ w: Watcher) {
@@ -229,7 +241,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       let pending = drives
       drives.removeAll(keepingCapacity: true)
       let paused = DispatchTime.now().uptimeNanoseconds < pausedUntil.load(ordering: .relaxed)
-      let frame: [UInt8]? = imageFrame != nil && !paused ? image : nil
+      let seen: [UInt8]? = imageFrame != nil ? image : nil
+      let frame = paused ? nil : seen
       let frameID = imageFrame ?? 0
       imageFrame = nil
       let announce = fieldsChanged
@@ -242,6 +255,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       for d in pending {
         broadcast(DioramaPackets.drive(frame: d.frame, seconds: Float(d.frame) / 20, modelMs: d.ms, values: d.values))
       }
+      // what the models see, paused or not, for a debug view that asked
+      if let seen { showSeen(seen, frameID) }
       // a pause does not stop a build, and must not hide why the models never run
       if paused && !preparingOrFailed { setStatus("paused: the driving model ran slow") }
       guard let frame, let nets = engines() else { continue }
@@ -347,6 +362,18 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
 
   private func boxesMessage(_ engine: any Engine, _ frame: UInt32, _ ms: Float) -> Data? {
     floats(engine, "boxes").map { DioramaPackets.boxes(frame: frame, ms: ms, rows: $0) }
+  }
+
+  /// The model input to the watchers that want it. A watcher this far
+  /// behind skips the frame rather than queueing more of them.
+  private func showSeen(_ packed: [UInt8], _ frame: UInt32) {
+    watchLock.lock()
+    defer { watchLock.unlock() }
+    let wanting = watchers.values.filter { $0.input && !$0.closed && !$0.dropped && $0.queue.count < 8 }
+    guard !wanting.isEmpty else { return }
+    let message = DioramaPackets.input(frame: frame, packed: packed)
+    for w in wanting { w.queue.append(message) }
+    watchLock.broadcast()
   }
 
   private func broadcast(_ message: Data) {

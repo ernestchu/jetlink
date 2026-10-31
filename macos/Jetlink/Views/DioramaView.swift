@@ -162,6 +162,8 @@ struct DioramaWebView: NSViewRepresentable {
     weak var webView: WKWebView?
     private var watcher: DioramaStage.Watcher?
     private var relay: Task<Void, Never>?
+    /// The page's Model input toggle: the frames the models see as well.
+    private var input = false
 
     init(stage: DioramaStage) { self.stage = stage }
 
@@ -169,6 +171,9 @@ struct DioramaWebView: NSViewRepresentable {
       guard let body = message.body as? String else { return }
       if body == "ready" {
         start()
+      } else if body == "input:on" || body == "input:off" {
+        input = body == "input:on"
+        if let watcher { stage.showInput(watcher, input) }
       } else if body.hasPrefix("error: ") {
         Log.write(.warning, "diorama", "the page: \(body.dropFirst(7))")
       }
@@ -186,7 +191,7 @@ struct DioramaWebView: NSViewRepresentable {
     func start() {
       stop()
       let stage = stage
-      let watcher = stage.watch()
+      let watcher = stage.watch(input: input)
       self.watcher = watcher
       relay = Task.detached(priority: .utility) { [weak self] in
         while !Task.isCancelled, let batch = stage.next(watcher, timeout: 0.5) {
