@@ -90,6 +90,8 @@ struct AppCommands: Commands {
         .keyboardShortcut("3", modifiers: .command)
       Button("Logs") { navigation.selection = .logs }
         .keyboardShortcut("4", modifiers: .command)
+      Button("Diorama") { navigation.selection = .diorama }
+        .keyboardShortcut("5", modifiers: .command)
     }
     CommandMenu("Server") {
       Button("Start Server") { appState.server.start() }

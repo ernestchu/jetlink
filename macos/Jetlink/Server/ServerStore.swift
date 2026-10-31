@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkDiorama
 import JetlinkKit
 import JetlinkORT
 import JetlinkServer
@@ -63,6 +64,10 @@ final class ServerStore: ServerControlling {
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var logStream: LogStream?
   @ObservationIgnored private var logTask: Task<Void, Never>?
+  /// Diorama's stage on the running server's frames, when its networks are there.
+  private(set) var diorama: DioramaStage?
+  /// Why there is no stage, for the Diorama view.
+  private(set) var dioramaProblem: String?
 
   init(settings: AppSettings, logs: LogBuffer, logFile: LogFileWriter? = LogFileWriter(), isLive: Bool = true) {
     self.settings = settings
@@ -125,6 +130,7 @@ final class ServerStore: ServerControlling {
       case .success(let embedded):
         self.embedded = embedded
         self.info = seed
+        self.attachDiorama(embedded)
         self.consumeTask = Task { [weak self] in
           for await event in embedded.events {
             self?.apply(event)
@@ -167,7 +173,30 @@ final class ServerStore: ServerControlling {
     runState = .stopped
   }
 
+  /// Diorama on the server's frames: its networks on the GPU through CoreML,
+  /// the Neural Engine left to the driving model. They run only while the
+  /// Diorama view is open.
+  private func attachDiorama(_ embedded: EmbeddedServer) {
+    let folder = settings.dioramaFolder
+    let engines = settings.cacheDirectory.appending(path: "diorama", directoryHint: .isDirectory)
+    do {
+      let networks = try DioramaStage.Networks(folder: folder)
+      let stage = DioramaStage(networks: networks) { onnx, name, _ in
+        try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory))
+      }
+      stage.start()
+      embedded.server.host.frameObserver = stage
+      diorama = stage
+      dioramaProblem = nil
+    } catch {
+      dioramaProblem = "\(error)"
+    }
+  }
+
   private func tearDown() {
+    embedded?.server.host.frameObserver = nil
+    diorama?.stop()
+    diorama = nil
     embedded = nil
     consumeTask?.cancel()
     consumeTask = nil

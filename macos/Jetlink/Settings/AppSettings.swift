@@ -46,6 +46,7 @@ final class AppSettings {
     static let startServerOnLaunch = "startServerOnLaunch"
     static let keepAwakeWhileServing = "keepAwakeWhileServing"
     static let keepAwakeLidClosed = "keepAwakeLidClosed"
+    static let dioramaFolder = "dioramaFolder"
   }
 
   @ObservationIgnored private let defaults: UserDefaults
@@ -76,6 +77,12 @@ final class AppSettings {
     didSet { defaults.set(keepAwakeLidClosed, forKey: Key.keepAwakeLidClosed) }
   }
 
+  /// Diorama's networks, as `python -m diorama export` writes them. Read
+  /// when the server starts.
+  var dioramaFolder: URL {
+    didSet { defaults.set(dioramaFolder.path(percentEncoded: false), forKey: Key.dioramaFolder) }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
@@ -96,6 +103,11 @@ final class AppSettings {
     startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) == nil ? true : defaults.bool(forKey: Key.startServerOnLaunch)
     keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) == nil ? true : defaults.bool(forKey: Key.keepAwakeWhileServing)
     keepAwakeLidClosed = defaults.bool(forKey: Key.keepAwakeLidClosed)
+    if let stored = defaults.string(forKey: Key.dioramaFolder), !stored.isEmpty {
+      dioramaFolder = URL(filePath: stored)
+    } else {
+      dioramaFolder = AppSettings.applicationSupportDirectory.appending(path: "diorama")
+    }
   }
 
   nonisolated static let defaultTCPPort = 5599

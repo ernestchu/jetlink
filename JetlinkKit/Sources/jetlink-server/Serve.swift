@@ -2,8 +2,10 @@
   import ArgumentParser
   import Dispatch
   import Foundation
+  import JetlinkDiorama
   import JetlinkKit
   import JetlinkLog
+  import JetlinkORT
   import JetlinkRegistry
   import JetlinkServer
   import JetlinkStatusPage
@@ -60,6 +62,13 @@
     var noKeepAlive = false
     @Flag(name: .customLong("no-cpu-keepwarm"), help: "Do not keep a CPU core busy between Neural Engine frames (a Mac's onnxruntime).")
     var noCPUKeepWarm = false
+    @Option(
+      help: ArgumentHelp(
+        "Diorama: draw the drive on the web page's /diorama/, from the networks `python -m diorama export` wrote to this folder. They run only while a page watches, and pause when a driving frame runs slow.",
+        valueName: "dir"))
+    var diorama: String?
+    @Option(help: "Diorama pauses its networks for 3 s after a driving frame slower than this many ms; 0 never pauses.")
+    var dioramaPauseMs = 40.0
     @Option(help: "debug, info, warning or error.")
     var logLevel = Log.Level.info
 
@@ -119,12 +128,18 @@
       #if os(Linux)
         hardware = PageHardware(cache: root, gpu: telemetry)
       #endif
-      let page = statusPort > 0 ? startPage(controller, hardware: hardware, log: log) : nil
+      let stage = diorama.flatMap { startDiorama(URL(fileURLWithPath: $0, isDirectory: true), backend: backend, server: server, log: log) }
+      if stage != nil && statusPort == 0 {
+        log.warning("--diorama draws on the web page, which is off: add --status-port")
+      }
+      let page = statusPort > 0 ? startPage(controller, hardware: hardware, log: log, diorama: stage) : nil
       stopOnSignals { signal in
         log.info("stopping on \(signal)")
         // The comma's server, its engine and gadget first, so a frame in
         // flight is answered or cut before anything else goes, then the
         // status page, which shows the server stopping until the end.
+        server.host.frameObserver = nil
+        stage?.stop()
         server.shutdown()
         log.info("stopped the server")
         if let page {
@@ -141,7 +156,51 @@
     /// open page never starts a catalog fetch, a download or a build by
     /// itself. Without its page it stays off: the comma matters more than a
     /// page.
-    private func startPage(_ controller: ServerController, hardware: (any PageHardwareSource)?, log: ServerLog) -> PageServer? {
+    /// Diorama's stage on the server's frames, its networks built for the
+    /// backend serving the comma: TensorRT plans in the cache's diorama/, or
+    /// onnxruntime on the GPU through CoreML (the CPU on Linux). Nil, with
+    /// the reason logged, when it cannot run here.
+    private func startDiorama(_ folder: URL, backend: any EngineBackend, server: Server, log: ServerLog) -> DioramaStage? {
+      let networks: DioramaStage.Networks
+      do {
+        networks = try DioramaStage.Networks(folder: folder)
+      } catch {
+        log.warning("no Diorama: \(error)")
+        return nil
+      }
+      let engines = server.configuration.cacheRoot.appending(path: "diorama", directoryHint: .isDirectory)
+      var factory: DioramaStage.EngineFactory?
+      #if os(Linux)
+        if let trt = backend as? TrtBackend {
+          factory = { onnx, name, report in
+            try FileManager.default.createDirectory(at: engines, withIntermediateDirectories: true)
+            let plan = engines.appending(path: "\(name).\(trt.tag())\(trt.suffix)")
+            if !FileManager.default.fileExists(atPath: plan.path) {
+              try trt.build(model: onnx, artifact: plan, report: report, metaExtra: ["diorama": name])
+            }
+            return try trt.load(artifact: plan, report: report)
+          }
+        }
+      #endif
+      if backend is OrtBackend {
+        factory = { onnx, name, _ in try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory)) }
+      }
+      guard let factory else {
+        log.warning("no Diorama: it runs on TensorRT or onnxruntime, not \(backend.name)")
+        return nil
+      }
+      var limits = DioramaStage.Limits()
+      limits.slowFrameUs = dioramaPauseMs > 0 ? UInt32(dioramaPauseMs * 1000) : .max
+      let stage = DioramaStage(networks: networks, limits: limits, makeEngine: factory)
+      stage.start()
+      server.host.frameObserver = stage
+      log.info("Diorama on /diorama/, networks from \(folder.path)")
+      return stage
+    }
+
+    private func startPage(
+      _ controller: ServerController, hardware: (any PageHardwareSource)?, log: ServerLog, diorama: DioramaStage? = nil
+    ) -> PageServer? {
       let auth = webAuth.map { WebAuth(url: URL(fileURLWithPath: $0)) }
       var system: (any PageSystem)?
       #if os(Linux)
@@ -149,7 +208,8 @@
       #endif
       do {
         let page = try PageServer.start(
-          port: statusPort, controller: controller, version: productVersion(), hardware: hardware, auth: auth, system: system)
+          port: statusPort, controller: controller, version: productVersion(), hardware: hardware, auth: auth, system: system,
+          diorama: diorama)
         let signIn = auth == nil ? "read-only" : auth!.isConfigured ? "with sign-in" : "read-only until \(auth!.url.path) is written"
         log.info("web page on port \(page.port), \(signIn)")
         return page

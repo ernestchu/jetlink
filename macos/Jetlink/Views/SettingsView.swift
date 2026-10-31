@@ -74,6 +74,27 @@ struct GeneralSettingsView: View {
         }
       }
 
+      Section("Diorama") {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(settings.dioramaFolder.path(percentEncoded: false))
+            .font(.system(.callout, design: .monospaced))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+          HStack {
+            Button("Choose…") { chooseDioramaFolder() }
+            Button("Show in Finder") {
+              NSWorkspace.shared.activateFileViewerSelecting([settings.dioramaFolder])
+            }
+          }
+          Text(
+            "The networks Diorama draws the drive with, as `python -m diorama export` writes them. They run on the GPU only while the Diorama view is open. Takes effect when the server restarts."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
       Section("Updates") {
         if updates.isAvailable {
           Toggle("Check for updates automatically", isOn: $updates.automaticallyChecks)
@@ -104,6 +125,18 @@ struct GeneralSettingsView: View {
   private var needsRestart: Bool {
     guard server.runState == .serving, let running = server.info?.cache else { return false }
     return running != settings.cacheDirectory.path(percentEncoded: false)
+  }
+
+  private func chooseDioramaFolder() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.allowsMultipleSelection = false
+    panel.directoryURL = settings.dioramaFolder
+    panel.prompt = "Choose"
+    if panel.runModal() == .OK, let url = panel.url {
+      settings.dioramaFolder = url
+    }
   }
 
   private func chooseCacheDirectory() {
