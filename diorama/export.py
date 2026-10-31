@@ -290,7 +290,38 @@ def export_onnx(module, path: Path, output_names: list[str]):
   onnx.save(model, str(path))
 
 
-def export(out: Path, dd3d_weights: str | None, seg_model: str = SEG_MODEL, skip_seg: bool = False):
+def export_coreml(module, path: Path, output_names: list[str]):
+  """The same module as a native CoreML program, for a Mac: one fp16 program on the GPU, where onnxruntime's
+  CoreML provider runs the ONNX graph in pieces with CPU work between them (Mask2Former: 53 ms a frame on an
+  M5 Pro's GPU against 185 ms). The outputs are float32, as the ONNX graph's are. Needs coremltools, and a
+  torch it supports."""
+  import shutil
+
+  import coremltools as ct
+  from coremltools.converters.mil.frontend.torch import ops
+  from coremltools.converters.mil.frontend.torch.torch_op_registry import register_torch_op
+  torch, _ = _torch()
+
+  class OneInt(int):
+    """coremltools folds a traced int() of a 1-element tensor with a scalar cast numpy refuses."""
+    def __new__(cls, v):
+      return int.__new__(cls, int(np.asarray(v).reshape(-1)[0]))
+
+  @register_torch_op(torch_alias=['int'], override=True)
+  def int_of_one_element(context, node):
+    ops._cast(context, node, OneInt, 'int32')
+
+  x = torch.full(PACKED_SHAPE, 128.0, dtype=torch.float16)
+  with torch.no_grad():
+    traced = torch.jit.trace(module, x, check_trace=False)
+  model = ct.convert(traced, inputs=[ct.TensorType(name='frame', shape=PACKED_SHAPE, dtype=np.float16)],
+                     outputs=[ct.TensorType(name=n, dtype=np.float32) for n in output_names], convert_to='mlprogram',
+                     compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15)
+  shutil.rmtree(path, ignore_errors=True)
+  model.save(str(path))
+
+
+def export(out: Path, dd3d_weights: str | None, seg_model: str = SEG_MODEL, skip_seg: bool = False, coreml: bool = False):
   out.mkdir(parents=True, exist_ok=True)
   meta = {
     'version': 1,
@@ -301,10 +332,16 @@ def export(out: Path, dd3d_weights: str | None, seg_model: str = SEG_MODEL, skip
     seg, meta['seg'] = seg_module(seg_model)
     export_onnx(seg, out / 'diorama_seg.onnx', ['qmap', 'label', 'score'])
     meta['seg']['file'] = 'diorama_seg.onnx'
+    if coreml:
+      export_coreml(seg, out / 'diorama_seg.mlpackage', ['qmap', 'label', 'score'])
+      meta['seg']['coreml'] = 'diorama_seg.mlpackage'
   if dd3d_weights:
     boxes, meta['dd3d'] = dd3d_module(dd3d_weights)
     export_onnx(boxes, out / 'diorama_dd3d.onnx', ['boxes'])
     meta['dd3d']['file'] = 'diorama_dd3d.onnx'
+    if coreml:
+      export_coreml(boxes, out / 'diorama_dd3d.mlpackage', ['boxes'])
+      meta['dd3d']['coreml'] = 'diorama_dd3d.mlpackage'
   elif (out / 'diorama.json').exists():
     meta.setdefault('dd3d', json.loads((out / 'diorama.json').read_text()).get('dd3d'))
   (out / 'diorama.json').write_text(json.dumps(meta, indent=1) + '\n')

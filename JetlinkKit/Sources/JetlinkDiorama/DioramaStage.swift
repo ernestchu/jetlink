@@ -36,19 +36,26 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     public let folder: URL
     /// diorama.json, as JSONSerialization read it.
     public let meta: [String: Any]
+    /// Each model's ONNX graph, or with `coreml` its CoreML package (a `.mlpackage`).
     public let seg: URL
     public let dd3d: URL?
 
-    public init(folder: URL) throws {
+    /// `coreml`: the CoreML packages diorama.json names where it names them
+    /// (`export --coreml`), the ONNX graphs otherwise. A Mac asks for them.
+    public init(folder: URL, coreml: Bool = false) throws {
       let url = folder.appending(path: "diorama.json")
       guard let data = try? Data(contentsOf: url), let meta = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
         throw DioramaError("no diorama.json in \(folder.path); export the models with: python -m diorama export --out \(folder.path)")
       }
-      guard let seg = (meta["seg"] as? [String: Any])?["file"] as? String else { throw DioramaError("\(url.path) names no segmentation graph") }
+      let file = { (model: String) -> String? in
+        let entry = meta[model] as? [String: Any]
+        return (coreml ? entry?["coreml"] as? String : nil) ?? entry?["file"] as? String
+      }
+      guard let seg = file("seg") else { throw DioramaError("\(url.path) names no segmentation graph") }
       self.folder = folder
       self.meta = meta
       self.seg = folder.appending(path: seg)
-      self.dd3d = ((meta["dd3d"] as? [String: Any])?["file"] as? String).map { folder.appending(path: $0) }
+      self.dd3d = file("dd3d").map { folder.appending(path: $0) }
       // a missing graph is found here, not minutes later behind the backend's error
       for graph in [self.seg, self.dd3d].compactMap({ $0 }) where !FileManager.default.fileExists(atPath: graph.path) {
         throw DioramaError("\(url.path) names \(graph.lastPathComponent), which is not in \(folder.path)")
@@ -59,7 +66,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   /// Builds or loads an engine for one of the graphs: the host's backend
   /// decides how (TensorRT, CoreML on the GPU, the CPU). Called on the
   /// stage's thread; the first time may take minutes.
-  public typealias EngineFactory = @Sendable (_ onnx: URL, _ name: String, _ report: @escaping ProgressFn) throws -> any Engine
+  public typealias EngineFactory = @Sendable (_ graph: URL, _ name: String, _ report: @escaping ProgressFn) throws -> any Engine
 
   /// One page or view watching: its own queue of messages.
   public final class Watcher: @unchecked Sendable {

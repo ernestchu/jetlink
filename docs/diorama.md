@@ -64,6 +64,17 @@ This writes three files, about 1.3 GB:
 DD3D's weights are downloaded from TRI's release; `--dd3d-weights FILE` uses a
 copy you have. `--no-dd3d` leaves DD3D out, and cars then face along their lane.
 
+**For a Mac,** add `--coreml`. It also writes both models as native CoreML
+packages, `diorama_seg.mlpackage` (513 MB) and `diorama_dd3d.mlpackage`
+(208 MB), which the Mac app and `jetlink-server` on a Mac run instead of the
+ONNX graphs: about 3.5 times as fast. It needs `coremltools` and the newest
+PyTorch it supports:
+
+```bash
+python3 -m pip install "torch==2.7.0" "torchvision==0.22.0" transformers onnx coremltools
+python3 -m diorama export --out ~/diorama-models --coreml
+```
+
 **Licenses:**
 
 - DD3D's code and weights are MIT (Toyota Research Institute).
@@ -132,23 +143,26 @@ jetlink-server --usb --backend trt --status-port 5600 --diorama /mnt/data/dioram
 Open **Diorama** in the sidebar (⌘5) and click **Download Models…**. The app
 names the models' licenses and their size, and on **Agree and Download**
 fetches them from [`ernestchu/jetlink-diorama`](https://huggingface.co/ernestchu/jetlink-diorama)
-on Hugging Face into **Settings > General > Diorama**'s folder. Each graph is
-checked against the repo's SHA-256 as it arrives, and the running server picks
-them up without a restart. A download stopped part way keeps the graphs it
-finished.
+on Hugging Face into **Settings > General > Diorama**'s folder: the CoreML
+packages, about 720 MB, not the ONNX graphs. Each large file is checked against
+the repo's SHA-256 as it arrives, and the running server picks the models up
+without a restart. A download stopped part way keeps the files it finished.
 
 To use models you exported yourself ([above](#export-the-models)), choose
 their folder in **Settings > General > Diorama** and restart the server.
 
-**Diorama** then shows the drive. The models run through
-CoreML on the GPU, so the Neural Engine stays the driving model's. CoreML
-compiles them the first time the view opens, which takes a few minutes; the
-compile is kept in the cache folder's `diorama/`.
+**Diorama** then shows the drive. The models run as native CoreML programs on
+the GPU, so the Neural Engine stays the driving model's. CoreML compiles them
+the first time the view opens, in a few seconds, and keeps the compile in the
+cache folder's `diorama/`. A folder without the CoreML packages runs the ONNX
+graphs through onnxruntime's CoreML provider instead: slower, and its first
+compile takes a few minutes.
 
 ### Publish the models for the app
 
 The Mac app downloads what `ernestchu/jetlink-diorama` holds: `diorama.json`
-and the graphs it names, from the repo's `main`. After an export, upload the
+and the models it names, from the repo's `main`. After an export with
+`--coreml`, upload the
 folder as it is, with the licenses above on the model card:
 
 ```bash
@@ -166,7 +180,8 @@ download; a Mac that has the old ones keeps them until its folder is emptied.
 | RTX 4090, TensorRT fp16 | 5.0 ms | 3.0 ms | outputs match onnxruntime fp32 on 99.2% of pixels; boxes within 8 cm |
 | RTX 4090, onnxruntime CUDA | 23 ms | 13 ms | `python -m diorama run` |
 | CPU (onnxruntime) | 685 ms | 322 ms | works, at a few frames a second |
-| M5 Pro Mac, CoreML on the GPU | 185 ms | 43 ms | the app: segmentation at about 5 Hz; the driving model's p99 rose from 14 to 22 ms while they ran, with no slow frames. CoreML's first compile takes about 2 minutes |
+| M5 Pro Mac, native CoreML on the GPU | 53 ms | 17 ms | the app (`--coreml`): the driving model's p99 rose from 14 to 15 ms while they ran. Query map matches the ONNX graph on 99.9% of pixels; boxes within 5 cm |
+| M5 Pro Mac, onnxruntime CoreML on the GPU | 185 ms | 43 ms | the ONNX graphs: segmentation at about 5 Hz; p99 rose from 14 to 22 ms. First compile about 2 minutes |
 | M5 Pro Mac, onnxruntime CPU | 275 ms | 159 ms | |
 | Jetson Orin | not measured yet | | |
 

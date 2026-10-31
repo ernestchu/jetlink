@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
   e.add_argument('--out', type=Path, required=True, help='folder for diorama_seg.onnx, diorama_dd3d.onnx and diorama.json')
   e.add_argument('--dd3d-weights', help='DD3D V2-99 KITTI checkpoint (downloaded when omitted)')
   e.add_argument('--no-dd3d', action='store_true', help='segmentation only: cars face along their lane')
+  e.add_argument('--coreml', action='store_true', help="also native CoreML packages, which the Mac app runs (needs coremltools)")
 
   r = sub.add_parser('run', help="run a recorded drive through the driving model and Diorama's models")
   r.add_argument('segments', type=Path, nargs='+', help="the drive's segment folders (fcamera.hevc, ecamera.hevc), or a folder of them")
@@ -63,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
       import torch
       weights = torch.hub.load_state_dict_from_url(DD3D_WEIGHTS_URL, map_location='cpu', progress=True, file_name='dd3d_kitti_v99.pth')
       weights = str(Path(torch.hub.get_dir()) / 'checkpoints' / 'dd3d_kitti_v99.pth')
-    export(args.out, weights)
+    export(args.out, weights, coreml=args.coreml)
     print(f'wrote {args.out}')
   elif args.cmd == 'run':
     from diorama.offline import run

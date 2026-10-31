@@ -158,12 +158,17 @@
     /// page.
     /// Diorama's stage on the server's frames, its models built for the
     /// backend serving the comma: TensorRT plans in the cache's diorama/, or
-    /// onnxruntime on the GPU through CoreML (the CPU on Linux). Nil, with
+    /// onnxruntime (the CPU on Linux), and on a Mac native CoreML programs on
+    /// the GPU where the folder has them. Nil, with
     /// the reason logged, when it cannot run here.
     private func startDiorama(_ folder: URL, backend: any EngineBackend, server: Server, log: ServerLog) -> DioramaStage? {
       let models: DioramaStage.Models
       do {
-        models = try DioramaStage.Models(folder: folder)
+        #if canImport(CoreML)
+          models = try DioramaStage.Models(folder: folder, coreml: true)
+        #else
+          models = try DioramaStage.Models(folder: folder)
+        #endif
       } catch {
         log.warning("no Diorama: \(error)")
         return nil
@@ -185,6 +190,9 @@
       if backend is OrtBackend {
         factory = { onnx, name, _ in try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory)) }
       }
+      #if canImport(CoreML)
+        factory = factory.map { DioramaStage.coreMLFactory(cache: engines, other: $0) }
+      #endif
       guard let factory else {
         log.warning("no Diorama: it runs on TensorRT or onnxruntime, not \(backend.name)")
         return nil

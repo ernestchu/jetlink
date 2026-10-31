@@ -175,17 +175,20 @@ final class ServerStore: ServerControlling {
     runState = .stopped
   }
 
-  /// Diorama on the server's frames: its models on the GPU through CoreML,
-  /// the Neural Engine left to the driving model. They run only while the
-  /// Diorama view is open.
+  /// Diorama on the server's frames: its models on the GPU, as native CoreML
+  /// programs where the folder has them (ONNX through onnxruntime's CoreML
+  /// provider otherwise), the Neural Engine left to the driving model. They
+  /// run only while the Diorama view is open.
   private func attachDiorama(_ embedded: EmbeddedServer) {
     let folder = settings.dioramaFolder
     let engines = settings.cacheDirectory.appending(path: "diorama", directoryHint: .isDirectory)
     do {
-      let models = try DioramaStage.Models(folder: folder)
-      let stage = DioramaStage(models: models) { onnx, name, _ in
-        try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory))
-      }
+      let models = try DioramaStage.Models(folder: folder, coreml: true)
+      let stage = DioramaStage(
+        models: models,
+        makeEngine: DioramaStage.coreMLFactory(cache: engines) { onnx, name, _ in
+          try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory))
+        })
       stage.start()
       embedded.server.host.frameObserver = stage
       diorama = stage
@@ -220,7 +223,7 @@ final class ServerStore: ServerControlling {
       do {
         // a mirror with Hugging Face's layout, for testing: -dioramaModelsHost http://...
         let host = UserDefaults.standard.string(forKey: "dioramaModelsHost") ?? DioramaModels.defaultHost
-        let plan = try await DioramaModels.plan(host: host)
+        let plan = try await DioramaModels.plan(host: host, coreml: true)
         self?.dioramaPlan = plan
         self?.dioramaDownload = .confirm(bytes: plan.bytes)
       } catch {
