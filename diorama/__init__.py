@@ -6,7 +6,7 @@ See the LICENSE file in the root directory for more details.
 
 Diorama: a live 3-D miniature of the drive, built from what the driving
 model sees. This package is the offline half: exporting the perception
-networks, and running a recorded drive through the driving model and them
+models, and running a recorded drive through the driving model and them
 into a file the Diorama page plays. The live half is in JetlinkKit
 (JetlinkDiorama). Not part of the jetlink wheel the comma runs.
 """

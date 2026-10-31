@@ -4,14 +4,14 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-A recorded drive through the driving model and Diorama's networks, into a
+A recorded drive through the driving model and Diorama's models, into a
 folder the Diorama page plays beside the drive's own footage:
 
     drive.diorama   the messages a live server would have streamed (packets.py)
     footage.mp4     the road camera over the same frames, for the side-by-side
 
 The frames are what a comma would send a jetlink server, warped and packed the
-same way, and the networks see what they would see live, so a drive tried
+same way, and the models see what they would see live, so a drive tried
 here looks as it would from the car.
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ def calibrate(route: Route, model: DrivingModel, frames: int, passes: int = 2) -
   return rpy, height
 
 
-class Networks:
+class Models:
   """Diorama's two graphs on onnxruntime, as a server runs them: the packed narrow frame in as float16."""
 
   def __init__(self, folder: Path, device: str):
@@ -76,8 +76,8 @@ class Networks:
     return self.dd3d.run(None, {'frame': narrow[None].astype(np.float16)})[0]
 
 
-def drive_meta(model: DrivingModel, nets: Networks, height: float, rpy, route: Route, start: int) -> dict:
-  m = nets.meta
+def drive_meta(model: DrivingModel, models: Models, height: float, rpy, route: Route, start: int) -> dict:
+  m = models.meta
   return {
     'version': 1, 'fps': FPS, 'frame': m['frame'], 'height': height, 'live': False,
     'drive': [[name, model.slices[name].stop - model.slices[name].start] for name in DRIVE_FIELDS if name in model.slices],
@@ -96,13 +96,13 @@ def footage_encoder(path: Path, size: tuple[int, int], width: int = 960) -> subp
      '-movflags', '+faststart', str(path)], stdin=subprocess.PIPE)
 
 
-def run(paths: list[Path], onnx: str, nets_dir: Path, out: Path, start_s: float = 0.0, seconds: float | None = None,
+def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: float = 0.0, seconds: float | None = None,
         device: str = 'auto', rpy: list[float] | None = None, calib_s: float = 60.0, seg_every: int = 2, dd3d_every: int = 4,
         rhd: bool = False) -> Path:
   route = Route.open(paths)
   print(f'{len(route.segments)} segments of {route.segments[0].name.rsplit("--", 1)[0]}, camera {route.size[0]}x{route.size[1]}')
   model = DrivingModel(onnx, device, rhd)
-  nets = Networks(nets_dir, device)
+  models = Models(models_dir, device)
   if rpy is not None:
     rpy, height = np.asarray(rpy, float), CAMERA_HEIGHT
   else:
@@ -118,7 +118,7 @@ def run(paths: list[Path], onnx: str, nets_dir: Path, out: Path, start_s: float 
   n = 0
   t0 = time.perf_counter()
   with open(out / 'drive.diorama', 'wb') as fh:
-    packets.write(fh, packets.meta(drive_meta(model, nets, height, rpy, route, start)))
+    packets.write(fh, packets.meta(drive_meta(model, models, height, rpy, route, start)))
     for k, narrow_yuv, warped in route.warped(rpy, first, None if count is None else start - first + count):
       t = time.perf_counter()
       vector = model.step(warped)
@@ -132,13 +132,13 @@ def run(paths: list[Path], onnx: str, nets_dir: Path, out: Path, start_s: float 
       packets.write(fh, packets.drive(frame, frame / FPS, 1000 * model_s, values))
       if frame % seg_every == 0:
         t = time.perf_counter()
-        qmap, label, score = nets.segment(warped[0])
+        qmap, label, score = models.segment(warped[0])
         seg_s = time.perf_counter() - t
         timing['seg'] += seg_s
         packets.write(fh, packets.seg(frame, 1000 * seg_s, qmap, label, score))
-      if nets.dd3d is not None and dd3d_every and frame % dd3d_every == 0:
+      if models.dd3d is not None and dd3d_every and frame % dd3d_every == 0:
         t = time.perf_counter()
-        rows = nets.boxes(warped[0])
+        rows = models.boxes(warped[0])
         dd3d_s = time.perf_counter() - t
         timing['dd3d'] += dd3d_s
         packets.write(fh, packets.boxes(frame, 1000 * dd3d_s, rows))

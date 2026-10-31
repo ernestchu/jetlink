@@ -6,7 +6,7 @@ import WebKit
 
 /// Diorama: the drive as a live 3-D miniature, drawn by the same page the
 /// Jetson serves, in a web view fed straight from the server's stage. The
-/// stage's networks run only while this view is open.
+/// stage's models run only while this view is open.
 struct DioramaView: View {
   @Environment(ServerStore.self) private var server
   @Environment(AppSettings.self) private var settings
@@ -21,22 +21,22 @@ struct DioramaView: View {
         switch server.dioramaDownload {
         case .downloading(let fraction):
           ProgressView(value: fraction) {
-            Text("Downloading Diorama's networks…")
+            Text("Downloading Diorama's models…")
           } currentValueLabel: {
             Text(fraction.formatted(.percent.precision(.fractionLength(0))))
           }
           .frame(maxWidth: 320)
         case .failed(let message):
-          Text("The networks did not download: \(message)")
+          Text("The models did not download: \(message)")
         default:
-          if hasNetworks {
-            Text(server.runState == .serving ? "Restart the server to load the networks." : "Start the server to see the drive.")
+          if hasModels {
+            Text(server.runState == .serving ? "Restart the server to load the models." : "Start the server to see the drive.")
           } else {
             Text(
-              "Diorama draws the drive with two networks, about 1.3 GB, that run on the GPU only while this view is open. Download them into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported them to in Settings."
+              "Diorama draws the drive with two models, about 1.3 GB, that run on the GPU only while this view is open. Download them into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported them to in Settings."
             )
           }
-          if hasNetworks, let problem = server.dioramaProblem {
+          if hasModels, let problem = server.dioramaProblem {
             Text(problem).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
           }
         }
@@ -49,8 +49,8 @@ struct DioramaView: View {
         case .failed:
           Button("Try Again") { server.checkDiorama() }
         default:
-          if !hasNetworks {
-            Button("Download Networks…") { server.checkDiorama() }.buttonStyle(.borderedProminent)
+          if !hasModels {
+            Button("Download Models…") { server.checkDiorama() }.buttonStyle(.borderedProminent)
           }
           SettingsLink { Text("Open Settings") }
         }
@@ -66,8 +66,8 @@ struct DioramaView: View {
   }
 
   /// diorama.json is written last, so its being there means the graphs are too.
-  private var hasNetworks: Bool {
-    FileManager.default.fileExists(atPath: settings.dioramaFolder.appending(path: DioramaNetworks.manifest).path(percentEncoded: false))
+  private var hasModels: Bool {
+    FileManager.default.fileExists(atPath: settings.dioramaFolder.appending(path: DioramaModels.manifest).path(percentEncoded: false))
   }
 
   private var confirming: Binding<Bool> {
@@ -87,9 +87,9 @@ struct DioramaLicenseSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      Text("Download Diorama's networks?").font(.headline)
+      Text("Download Diorama's models?").font(.headline)
       Text(
-        "\(bytes.formatted(.byteCount(style: .file))) from huggingface.co/\(DioramaNetworks.repo), into \(folder.path(percentEncoded: false))."
+        "\(bytes.formatted(.byteCount(style: .file))) from huggingface.co/\(DioramaModels.repo), into \(folder.path(percentEncoded: false))."
       )
       .fixedSize(horizontal: false, vertical: true)
       VStack(alignment: .leading, spacing: 8) {

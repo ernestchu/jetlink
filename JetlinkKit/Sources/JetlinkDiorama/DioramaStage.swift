@@ -15,7 +15,7 @@ import Synchronization
 ///
 /// The comma comes first. Nothing runs while nobody watches; the frame hook
 /// only tries its lock and copies at most 100 KB; and a driving frame slower
-/// than `Limits.slowFrameUs` stops the networks for `Limits.backOff`, since
+/// than `Limits.slowFrameUs` stops the models for `Limits.backOff`, since
 /// they share the accelerator with the driving model.
 public final class DioramaStage: FrameObserver, @unchecked Sendable {
   public struct Limits: Sendable {
@@ -23,7 +23,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     public var segEvery: UInt32 = 2
     /// DD3D on every this many frames; 0 never.
     public var dd3dEvery: UInt32 = 4
-    /// A driving frame this slow pauses the networks.
+    /// A driving frame this slow pauses the models.
     public var slowFrameUs: UInt32 = 40_000
     public var backOff: TimeInterval = 3
     /// Messages a watcher may fall behind by before it is dropped.
@@ -31,8 +31,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     public init() {}
   }
 
-  /// The networks `python -m diorama export` wrote, as diorama.json describes them.
-  public struct Networks: @unchecked Sendable {
+  /// The models `python -m diorama export` wrote, as diorama.json describes them.
+  public struct Models: @unchecked Sendable {
     public let folder: URL
     /// diorama.json, as JSONSerialization read it.
     public let meta: [String: Any]
@@ -42,7 +42,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     public init(folder: URL) throws {
       let url = folder.appending(path: "diorama.json")
       guard let data = try? Data(contentsOf: url), let meta = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-        throw DioramaError("no diorama.json in \(folder.path); export the networks with: python -m diorama export --out \(folder.path)")
+        throw DioramaError("no diorama.json in \(folder.path); export the models with: python -m diorama export --out \(folder.path)")
       }
       guard let seg = (meta["seg"] as? [String: Any])?["file"] as? String else { throw DioramaError("\(url.path) names no segmentation graph") }
       self.folder = folder
@@ -68,7 +68,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     fileprivate var closed = false
   }
 
-  public let networks: Networks
+  public let models: Models
   public let limits: Limits
   private let makeEngine: EngineFactory
   private let log = ServerLog(category: "diorama")
@@ -84,7 +84,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   private var ranges: [Range<Int>] = []
   private var fieldsChanged = false
   private let wake = DispatchSemaphore(value: 0)
-  /// Until when the networks rest, in uptime nanoseconds: outside the lock, so a slow frame is never missed.
+  /// Until when the models rest, in uptime nanoseconds: outside the lock, so a slow frame is never missed.
   private let pausedUntil = Atomic<UInt64>(0)
 
   // The watchers' queues.
@@ -93,7 +93,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   private var stopped = false
   private var status = "idle"
 
-  // The networks, prepared on a thread of their own: a first TensorRT build
+  // The models, prepared on a thread of their own: a first TensorRT build
   // takes minutes, and the drive messages keep flowing meanwhile.
   private let engineLock = NSLock()
   private var seg: (any Engine)?
@@ -102,8 +102,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   private var loadFailed = false
   private let half: [UInt16] = (0..<256).map { DioramaStage.float16Bits(Float($0)) }
 
-  public init(networks: Networks, limits: Limits = Limits(), makeEngine: @escaping EngineFactory) {
-    self.networks = networks
+  public init(models: Models, limits: Limits = Limits(), makeEngine: @escaping EngineFactory) {
+    self.models = models
     self.limits = limits
     self.makeEngine = makeEngine
   }
@@ -133,7 +133,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
 
   // MARK: watchers
 
-  /// A new watcher, its queue starting with the meta message and the networks' status.
+  /// A new watcher, its queue starting with the meta message and the models' status.
   public func watch() -> Watcher {
     let w = Watcher()
     let meta = DioramaPackets.meta(metaInfo())
@@ -235,7 +235,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       for d in pending {
         broadcast(DioramaPackets.drive(frame: d.frame, seconds: Float(d.frame) / 20, modelMs: d.ms, values: d.values))
       }
-      // a pause does not stop a build, and must not hide why the networks never run
+      // a pause does not stop a build, and must not hide why the models never run
       if paused && !preparingOrFailed { setStatus("paused: the driving model ran slow") }
       guard let frame, let nets = engines() else { continue }
       setStatus("running")
@@ -249,7 +249,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     }
   }
 
-  /// The networks once they are ready; until then nil, and the first call starts preparing them.
+  /// The models once they are ready; until then nil, and the first call starts preparing them.
   private func engines() -> (seg: any Engine, dd3d: (any Engine)?)? {
     engineLock.lock()
     defer { engineLock.unlock() }
@@ -270,10 +270,10 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       { stage, frac, msg in if frac == 0 || frac == 1 { log.info("\(name): \(stage), \(msg)") } }
     }
     do {
-      setStatus("preparing the segmentation network; the first time takes minutes")
-      let seg = try makeEngine(networks.seg, "seg", progress("segmentation"))
+      setStatus("preparing the segmentation model; the first time takes minutes")
+      let seg = try makeEngine(models.seg, "seg", progress("segmentation"))
       var dd3d: (any Engine)?
-      if let url = networks.dd3d {
+      if let url = models.dd3d {
         setStatus("preparing DD3D")
         dd3d = try makeEngine(url, "dd3d", progress("dd3d"))
       }
@@ -282,15 +282,15 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       self.dd3d = dd3d
       preparing = false
       engineLock.unlock()
-      log.info("networks ready")
+      log.info("models ready")
     } catch {
       engineLock.lock()
       loadFailed = true
       preparing = false
       engineLock.unlock()
-      log.error("cannot run the networks: \(error)")
+      log.error("cannot run the models: \(error)")
       // the page has one line for it: the graphs by name, the folder is in the log
-      setStatus("off: " + "\(error)".replacingOccurrences(of: networks.folder.path + "/", with: ""))
+      setStatus("off: " + "\(error)".replacingOccurrences(of: models.folder.path + "/", with: ""))
     }
   }
 
@@ -372,14 +372,14 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     watchLock.broadcast()
   }
 
-  /// The meta message: the frame's camera and the networks' classes from
+  /// The meta message: the frame's camera and the models' classes from
   /// diorama.json, and the drive fields as the loaded model lays them out.
   private func metaInfo() -> [String: Any] {
     frameLock.lock()
     let drive = fields.map { [$0.name, $0.count] as [Any] }
     frameLock.unlock()
     var info: [String: Any] = ["version": 1, "fps": 20, "live": true, "height": 1.22, "drive": drive]
-    for key in ["frame", "seg", "dd3d"] { if let v = networks.meta[key] { info[key] = v } }
+    for key in ["frame", "seg", "dd3d"] { if let v = models.meta[key] { info[key] = v } }
     return info
   }
 

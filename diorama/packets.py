@@ -9,7 +9,7 @@ stores them: one byte of kind, then its payload, little-endian throughout.
 JetlinkDiorama's DioramaPackets.swift writes the same bytes and diorama.js
 reads them; docs/diorama.md has the table.
 
-    M  meta    JSON: the frame's camera, the drive fields and their float counts, the networks' classes
+    M  meta    JSON: the frame's camera, the drive fields and their float counts, the models' classes
     D  drive   u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs, in meta's order
     S  seg     u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] label (255: dropped),
                u8[queries] score * 255, u32 runs, runs x (u8 query, u8 length - 1): the query map, row by row
@@ -17,7 +17,7 @@ reads them; docs/diorama.md has the table.
 
 `frame` counts the comma's frames (20 a second); a seg or boxes message names
 the frame its image came from. The milliseconds are how long the driving model
-took for that frame, and the network for that image.
+took for that frame, and the model for that image.
 
 A file is the messages one after another, each after its u32 length.
 """

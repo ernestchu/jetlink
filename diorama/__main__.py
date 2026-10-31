@@ -5,7 +5,7 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
     python -m diorama export --out ~/diorama-models
-    python -m diorama run /data/media/0/realdata/<route>--* --model big.onnx --nets ~/diorama-models --out drive/
+    python -m diorama run /data/media/0/realdata/<route>--* --model big.onnx --models ~/diorama-models --out drive/
     python -m diorama view drive/
     python -m diorama replay /data/media/0/realdata/<route>--* --model big.onnx --host 127.0.0.1   # into a live server
 """
@@ -17,18 +17,18 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> int:
-  ap = argparse.ArgumentParser(prog='python -m diorama', description='Diorama on a recorded drive: export the networks, run a drive, play it.')
+  ap = argparse.ArgumentParser(prog='python -m diorama', description='Diorama on a recorded drive: export the models, run a drive, play it.')
   sub = ap.add_subparsers(dest='cmd', required=True)
 
-  e = sub.add_parser('export', help="export Diorama's networks to ONNX (needs torch and transformers)")
+  e = sub.add_parser('export', help="export Diorama's models to ONNX (needs torch and transformers)")
   e.add_argument('--out', type=Path, required=True, help='folder for diorama_seg.onnx, diorama_dd3d.onnx and diorama.json')
   e.add_argument('--dd3d-weights', help='DD3D V2-99 KITTI checkpoint (downloaded when omitted)')
   e.add_argument('--no-dd3d', action='store_true', help='segmentation only: cars face along their lane')
 
-  r = sub.add_parser('run', help='run a recorded drive through the driving model and the networks')
+  r = sub.add_parser('run', help="run a recorded drive through the driving model and Diorama's models")
   r.add_argument('segments', type=Path, nargs='+', help="the drive's segment folders (fcamera.hevc, ecamera.hevc), or a folder of them")
   r.add_argument('--model', required=True, help='the driving model ONNX, as jetlink serves it')
-  r.add_argument('--nets', type=Path, required=True, help='the folder `export` wrote')
+  r.add_argument('--models', '--nets', dest='models', type=Path, required=True, help='the folder `export` wrote')
   r.add_argument('--out', type=Path, required=True)
   r.add_argument('--start', type=float, default=0.0, help='seconds into the drive')
   r.add_argument('--seconds', type=float, help='how much of it (default: to the end)')
@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f'wrote {args.out}')
   elif args.cmd == 'run':
     from diorama.offline import run
-    run(args.segments, args.model, args.nets, args.out, args.start, args.seconds, args.device, args.rpy, args.calib_seconds, rhd=args.rhd)
+    run(args.segments, args.model, args.models, args.out, args.start, args.seconds, args.device, args.rpy, args.calib_seconds, rhd=args.rhd)
   elif args.cmd == 'replay':
     from diorama.replay import replay
     replay(args.segments, args.model, args.host, args.port, args.start, args.seconds, args.rpy, args.calib_seconds, args.device,

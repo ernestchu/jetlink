@@ -87,7 +87,7 @@ struct GeneralSettingsView: View {
             }
           }
           Text(
-            "The networks Diorama draws the drive with: downloaded from the Diorama view, or as `python -m diorama export` writes them. They run on the GPU only while the Diorama view is open. A folder chosen here takes effect when the server restarts."
+            "The models Diorama draws the drive with: downloaded from the Diorama view, or as `python -m diorama export` writes them. They run on the GPU only while the Diorama view is open. A folder chosen here takes effect when the server restarts."
           )
           .font(.callout)
           .foregroundStyle(.secondary)

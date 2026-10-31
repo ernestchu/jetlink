@@ -63,8 +63,8 @@ struct DioramaPacketsTests {
   }
 }
 
-/// Stands in for a network: the packed frame's size in, outputs of the shapes the exported graphs have.
-final class FakeNetwork: EngineCore, @unchecked Sendable {
+/// Stands in for a model: the packed frame's size in, outputs of the shapes the exported graphs have.
+final class FakeModel: EngineCore, @unchecked Sendable {
   private(set) var runs = 0
   private(set) var lastFirstPixel: UInt16 = 0
 
@@ -96,7 +96,7 @@ struct DioramaStageTests {
     sha256: "ab", nbytes: 1, frameSkip: 4, inputShapes: [], outputShapes: [NamedShape("outputs", [1, 20])],
     outputSlices: [NamedSlice("plan", 0..<4), NamedSlice("pose", 4..<6), NamedSlice("hidden_state", 6..<20)], checkpoint: nil)
 
-  func networks() throws -> DioramaStage.Networks {
+  func models() throws -> DioramaStage.Models {
     let dir = FileManager.default.temporaryDirectory.appending(path: "diorama-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let meta: [String: Any] = [
@@ -106,15 +106,15 @@ struct DioramaStageTests {
     ]
     try JSONSerialization.data(withJSONObject: meta).write(to: dir.appending(path: "diorama.json"))
     for graph in ["diorama_seg.onnx", "diorama_dd3d.onnx"] { try Data().write(to: dir.appending(path: graph)) }
-    return try DioramaStage.Networks(folder: dir)
+    return try DioramaStage.Models(folder: dir)
   }
 
   @Test("A folder without the graphs diorama.json names is refused, naming the one missing")
   func missingGraph() throws {
-    let dir = try networks().folder
+    let dir = try models().folder
     try FileManager.default.removeItem(at: dir.appending(path: "diorama_dd3d.onnx"))
     #expect {
-      try DioramaStage.Networks(folder: dir)
+      try DioramaStage.Models(folder: dir)
     } throws: { "\($0)".contains("diorama_dd3d.onnx, which is not in") }
   }
 
@@ -136,8 +136,8 @@ struct DioramaStageTests {
 
   @Test("Nobody watching: frames are not even copied, and nothing runs")
   func idle() throws {
-    let seg = try FakeNetwork(boxes: false)
-    let stage = DioramaStage(networks: try networks()) { _, name, _ in name == "seg" ? seg : try FakeNetwork(boxes: true) }
+    let seg = try FakeModel(boxes: false)
+    let stage = DioramaStage(models: try models()) { _, name, _ in name == "seg" ? seg : try FakeModel(boxes: true) }
     stage.start()
     defer { stage.stop() }
     serve(stage, frame: 0)
@@ -147,8 +147,8 @@ struct DioramaStageTests {
 
   @Test("A watcher hears the meta, every frame's outputs and the segmentation of every other frame")
   func watched() throws {
-    let seg = try FakeNetwork(boxes: false), boxes = try FakeNetwork(boxes: true)
-    let stage = DioramaStage(networks: try networks()) { _, name, _ in name == "seg" ? seg : boxes }
+    let seg = try FakeModel(boxes: false), boxes = try FakeModel(boxes: true)
+    let stage = DioramaStage(models: try models()) { _, name, _ in name == "seg" ? seg : boxes }
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -174,12 +174,12 @@ struct DioramaStageTests {
     stage.unwatch(w)
   }
 
-  @Test("The drive keeps flowing while the networks are prepared")
+  @Test("The drive keeps flowing while the models are prepared")
   func preparing() throws {
-    let seg = try FakeNetwork(boxes: false)
-    let stage = DioramaStage(networks: try networks()) { _, name, _ in
+    let seg = try FakeModel(boxes: false)
+    let stage = DioramaStage(models: try models()) { _, name, _ in
       Thread.sleep(forTimeInterval: 1)  // a first build
-      return name == "seg" ? seg : try FakeNetwork(boxes: true)
+      return name == "seg" ? seg : try FakeModel(boxes: true)
     }
     stage.start()
     defer { stage.stop() }
@@ -194,10 +194,10 @@ struct DioramaStageTests {
     #expect(stage.state.hasPrefix("preparing"))
   }
 
-  @Test("A watcher hears why the networks are off, and a pause does not hide it")
+  @Test("A watcher hears why the models are off, and a pause does not hide it")
   func offSaysWhy() throws {
     struct Missing: Error, CustomStringConvertible { var description: String { "File doesn't exist" } }
-    let stage = DioramaStage(networks: try networks()) { _, _, _ in throw Missing() }
+    let stage = DioramaStage(models: try models()) { _, _, _ in throw Missing() }
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -217,12 +217,12 @@ struct DioramaStageTests {
     #expect(first.last.map { String(decoding: $0.dropFirst(), as: UTF8.self) } == "off: File doesn't exist")
   }
 
-  @Test("A slow driving frame pauses the networks")
+  @Test("A slow driving frame pauses the models")
   func backsOff() throws {
-    let seg = try FakeNetwork(boxes: false)
+    let seg = try FakeModel(boxes: false)
     var limits = DioramaStage.Limits()
     limits.backOff = 30
-    let stage = DioramaStage(networks: try networks(), limits: limits) { _, name, _ in name == "seg" ? seg : try FakeNetwork(boxes: true) }
+    let stage = DioramaStage(models: try models(), limits: limits) { _, name, _ in name == "seg" ? seg : try FakeModel(boxes: true) }
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()

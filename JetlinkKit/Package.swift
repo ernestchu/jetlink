@@ -107,7 +107,7 @@ let package = Package(
       dependencies: [
         "JetlinkKit", "JetlinkLog", "JetlinkServer", "JetlinkStatusPage", .target(name: "CUsbfs", condition: .when(platforms: linux)),
       ]),
-    // Diorama: the networks on the frames a server answers, and the page that draws the drive.
+    // Diorama: the models on the frames a server answers, and the page that draws the drive.
     .target(name: "JetlinkDiorama", dependencies: ["JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")]),
     // CryptoExtras for PBKDF2, on every platform: CommonCrypto's on Apple's,
     // BoringSSL's elsewhere.

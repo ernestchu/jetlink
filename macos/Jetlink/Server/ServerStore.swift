@@ -66,7 +66,7 @@ final class ServerStore: ServerControlling {
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var logStream: LogStream?
   @ObservationIgnored private var logTask: Task<Void, Never>?
-  /// Diorama's stage on the running server's frames, when its networks are there.
+  /// Diorama's stage on the running server's frames, when its models are there.
   private(set) var diorama: DioramaStage?
   /// Why there is no stage, for the Diorama view.
   private(set) var dioramaProblem: String?
@@ -175,15 +175,15 @@ final class ServerStore: ServerControlling {
     runState = .stopped
   }
 
-  /// Diorama on the server's frames: its networks on the GPU through CoreML,
+  /// Diorama on the server's frames: its models on the GPU through CoreML,
   /// the Neural Engine left to the driving model. They run only while the
   /// Diorama view is open.
   private func attachDiorama(_ embedded: EmbeddedServer) {
     let folder = settings.dioramaFolder
     let engines = settings.cacheDirectory.appending(path: "diorama", directoryHint: .isDirectory)
     do {
-      let networks = try DioramaStage.Networks(folder: folder)
-      let stage = DioramaStage(networks: networks) { onnx, name, _ in
+      let models = try DioramaStage.Models(folder: folder)
+      let stage = DioramaStage(models: models) { onnx, name, _ in
         try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory))
       }
       stage.start()
@@ -195,7 +195,7 @@ final class ServerStore: ServerControlling {
     }
   }
 
-  // MARK: Diorama's networks
+  // MARK: Diorama's models
 
   enum DioramaDownload: Equatable {
     case idle
@@ -208,19 +208,19 @@ final class ServerStore: ServerControlling {
   }
 
   private(set) var dioramaDownload: DioramaDownload = .idle
-  @ObservationIgnored private var dioramaPlan: DioramaNetworks.Plan?
+  @ObservationIgnored private var dioramaPlan: DioramaModels.Plan?
   @ObservationIgnored private var dioramaTask: Task<Void, Never>?
   @ObservationIgnored private var dioramaStop = StopFlag()
 
-  /// Looks up the networks' files and sizes, then waits for `downloadDiorama()`.
+  /// Looks up the models' files and sizes, then waits for `downloadDiorama()`.
   func checkDiorama() {
     guard dioramaTask == nil else { return }
     dioramaDownload = .checking
     dioramaTask = Task { [weak self] in
       do {
-        // a mirror with Hugging Face's layout, for testing: -dioramaNetworksHost http://...
-        let host = UserDefaults.standard.string(forKey: "dioramaNetworksHost") ?? DioramaNetworks.defaultHost
-        let plan = try await DioramaNetworks.plan(host: host)
+        // a mirror with Hugging Face's layout, for testing: -dioramaModelsHost http://...
+        let host = UserDefaults.standard.string(forKey: "dioramaModelsHost") ?? DioramaModels.defaultHost
+        let plan = try await DioramaModels.plan(host: host)
         self?.dioramaPlan = plan
         self?.dioramaDownload = .confirm(bytes: plan.bytes)
       } catch {
@@ -239,7 +239,7 @@ final class ServerStore: ServerControlling {
     dioramaDownload = .downloading(0)
     dioramaTask = Task { [weak self] in
       do {
-        try await DioramaNetworks.fetch(
+        try await DioramaModels.fetch(
           plan, into: folder,
           progress: { fraction in
             // each hop is a task of its own, so they may land out of order: the bar only grows
