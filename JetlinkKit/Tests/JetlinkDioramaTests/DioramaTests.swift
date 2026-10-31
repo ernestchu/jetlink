@@ -234,3 +234,49 @@ struct DioramaStageTests {
     #expect(stage.state.hasPrefix("paused"))
   }
 }
+
+#if canImport(CoreML)
+  import CoreML
+
+  @Suite("Diorama's CoreML engine")
+  struct CoreMLEngineTests {
+    /// Fixtures/tiny.mlpackage: `export_coreml` of a module whose qmap is the frame's first two planes added.
+    func package() throws -> URL {
+      try #require(Bundle.module.url(forResource: "tiny", withExtension: "mlpackage", subdirectory: "Fixtures"))
+    }
+
+    @Test("The packed fp16 frame in, float32 outputs out, from the host buffers")
+    func runs() throws {
+      let cache = FileManager.default.temporaryDirectory.appending(path: "coreml-\(UUID().uuidString)")
+      defer { try? FileManager.default.removeItem(at: cache) }
+      let engine = try CoreMLEngine(package: try package(), cache: cache)
+      #expect(engine.inputs["frame"]?.type == .float16)
+      #expect(engine.inputs["frame"]?.shape == [1, 6, 128, 256])
+      #expect(engine.outputs["qmap"]?.type == .float)
+      let frame = try #require(engine.hostInput("frame")).assumingMemoryBound(to: UInt16.self)
+      let plane = 128 * 256
+      for i in 0..<(6 * plane) { frame[i] = DioramaStage.float16Bits(Float(i / plane + 1)) }  // plane k holds k + 1
+      frame[7] = DioramaStage.float16Bits(100)  // one pixel of the first plane
+      try engine.run()
+      let qmap = try #require(engine.output("qmap")).assumingMemoryBound(to: Float.self)
+      #expect(qmap[0] == 3)
+      #expect(qmap[7] == 102)
+      #expect(qmap[plane - 1] == 3)
+    }
+
+    @Test("The compile is kept, and made again when the package changes")
+    func cachesTheCompile() throws {
+      let cache = FileManager.default.temporaryDirectory.appending(path: "coreml-\(UUID().uuidString)")
+      defer { try? FileManager.default.removeItem(at: cache) }
+      let first = try CoreMLEngine.compiled(try package(), cache: cache)
+      let made = try FileManager.default.attributesOfItem(atPath: first.path)[.creationDate] as? Date
+      Thread.sleep(forTimeInterval: 0.05)
+      let again = try CoreMLEngine.compiled(try package(), cache: cache)
+      #expect(again == first)
+      #expect(try FileManager.default.attributesOfItem(atPath: again.path)[.creationDate] as? Date == made)
+      try "stale".write(to: cache.appending(path: "tiny.stamp"), atomically: true, encoding: .utf8)
+      _ = try CoreMLEngine.compiled(try package(), cache: cache)
+      #expect(try FileManager.default.attributesOfItem(atPath: first.path)[.creationDate] as? Date != made)
+    }
+  }
+#endif

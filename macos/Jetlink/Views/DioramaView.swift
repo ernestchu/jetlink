@@ -33,7 +33,7 @@ struct DioramaView: View {
             Text(server.runState == .serving ? "Restart the server to load the models." : "Start the server to see the drive.")
           } else {
             Text(
-              "Diorama draws the drive with two models, about 1.3 GB, that run on the GPU only while this view is open. Download them into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported them to in Settings."
+              "Diorama draws the drive with two models, about 720 MB, that run on the GPU only while this view is open. Download them into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported them to in Settings."
             )
           }
           if hasModels, let problem = server.dioramaProblem {
@@ -79,7 +79,7 @@ struct DioramaView: View {
   }
 }
 
-/// Before 1.3 GB comes down: what it is, where it goes, and whose terms it comes under.
+/// Before 720 MB comes down: what it is, where it goes, and whose terms it comes under.
 struct DioramaLicenseSheet: View {
   let bytes: Int64
   let folder: URL
