@@ -1,0 +1,267 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026-, Zeph Leggett.
+
+  This file is part of jetlink and is licensed under the MIT License.
+  See the LICENSE file in the root directory for more details.
+
+  Diorama: a live 3-D miniature of the drive, from what the driving model sees.
+  One page, three sources:
+    live    served by jetlink-server at /diorama/, fed by /diorama/events
+    drive   ?drive=drive.diorama&footage=footage.mp4: a recorded drive (python -m diorama view) beside its footage
+    bridge  ?bridge=1: the Mac app pushes the messages itself (Diorama.push)
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Diorama</title>
+<style>
+  :root {
+    --bg: #0f1012; --panel: #18191c; --line: #2a2c31; --text: #ececee; --dim: #9a9ca3; --accent: #3884ff; --bad: #ff5a52; --ok: #46c86e;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] { --bg: #f3f3f5; --panel: #ffffff; --line: #dcdde1; --text: #17181b; --dim: #62646b; color-scheme: light; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) { --bg: #f3f3f5; --panel: #ffffff; --line: #dcdde1; --text: #17181b; --dim: #62646b; color-scheme: light; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: 0.02em; }
+  header .src { color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  header .spacer { flex: 1; }
+  header a { color: var(--dim); text-decoration: none; font-size: 13px; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr; min-height: 0; }
+  main.side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 760px) { main.side { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+  .pane { position: relative; min-height: 0; min-width: 0; background: #000; overflow: hidden; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+  canvas { width: 100%; height: 100%; display: block; }
+  .hud { position: absolute; left: 14px; top: 14px; padding: 12px 16px; border-radius: 12px; background: rgba(22, 23, 26, 0.86);
+    color: #f2f2f4; min-width: 150px; pointer-events: none; }
+  .hud .speed { font-size: 44px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .hud .unit { font-size: 12px; color: #a9abb1; letter-spacing: 0.08em; }
+  .hud .lead, .hud .mode { font-size: 12px; color: #c4c6cb; margin-top: 6px; }
+  .hud .mode { color: #8d9097; letter-spacing: 0.06em; }
+  .hud .accel { position: absolute; right: 14px; top: 14px; bottom: 14px; width: 6px; border-radius: 3px; background: #3b3d42; }
+  .hud .accel i { position: absolute; left: 0; right: 0; border-radius: 3px; }
+  .waiting { position: absolute; inset: 0; display: grid; place-items: center; color: #b9bbc1; font-size: 15px; text-align: center;
+    padding: 24px; background: rgba(15, 16, 18, 0.6); }
+  .waiting[hidden] { display: none; }
+  footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  .stat { display: flex; flex-direction: column; min-width: 92px; }
+  .stat b { font-size: 15px; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .stat span { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat b.over { color: var(--bad); }
+  .transport { display: flex; align-items: center; gap: 10px; flex: 1 1 320px; min-width: 0; }
+  .transport input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+  button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  .time { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 13px; white-space: nowrap; }
+  .error { padding: 24px; color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Diorama</h1>
+  <div class="src" id="src"></div>
+  <div class="spacer"></div>
+  <a id="back" href="../" hidden>Status</a>
+</header>
+<main id="main">
+  <div class="pane" id="footagePane" hidden><video id="footage" muted playsinline preload="auto"></video></div>
+  <div class="pane" id="scenePane">
+    <canvas id="scene"></canvas>
+    <div class="hud" id="hud">
+      <div class="accel"><i id="accel"></i></div>
+      <div class="speed" id="speed">–</div>
+      <div class="unit">MPH</div>
+      <div class="lead" id="lead"></div>
+      <div class="mode" id="mode"></div>
+    </div>
+    <div class="waiting" id="waiting">Loading…</div>
+  </div>
+</main>
+<footer>
+  <div class="stat"><b id="modelMs">–</b><span>Driving model</span></div>
+  <div class="stat"><b id="modelHz">–</b><span>Frames</span></div>
+  <div class="stat"><b id="segMs">–</b><span>Segmentation</span></div>
+  <div class="stat"><b id="segHz">–</b><span>Perception</span></div>
+  <div class="stat"><b id="dd3dMs">–</b><span>Headings (DD3D)</span></div>
+  <div class="stat"><b id="tracks">–</b><span>Tracked</span></div>
+  <div class="transport" id="transport" hidden>
+    <button id="play">Play</button>
+    <input type="range" id="seek" min="0" max="1" step="0.05" value="0">
+    <span class="time" id="time">0:00 / 0:00</span>
+  </div>
+</footer>
+<script src="diorama-engine.js"></script>
+<script src="diorama-render.js"></script>
+<script>
+(function () {
+  'use strict';
+  const E = DioramaEngine, $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const theme = params.get('theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.dataset.theme = theme;
+  const engine = new E.Engine();
+  let renderer = null, lastData = 0, frameTimes = [];
+
+  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const median = (a) => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return b[b.length >> 1]; };
+
+  function wait(text) { $('waiting').textContent = text; $('waiting').hidden = !text; }
+
+  function hud(state) {
+    if (!state) return;
+    $('speed').textContent = Math.round(state.hud.v * E.MPH);
+    $('lead').textContent = state.hud.lead != null ? `lead ${Math.round(state.hud.lead)} m` : '';
+    const s = state.view;
+    $('mode').textContent = s < 0.02 ? 'ROAD VIEW' : s > 0.98 ? "BIRD'S-EYE" : `PANNING ${Math.round(s * 100)}%`;
+    const a = E.clamp(state.hud.a, -3.2, 3.2), bar = $('accel');
+    bar.style.top = `${50 - Math.max(a, 0) / 3.2 * 50}%`;
+    bar.style.bottom = `${50 + Math.min(a, 0) / 3.2 * 50}%`;
+    bar.style.background = a > 0.2 ? '#5ad27a' : a < -0.5 ? '#ff5a52' : '#c8c8c8';
+  }
+
+  function stats() {
+    const t = engine.timing, m = median(t.model), sg = median(t.seg), dd = median(t.dd3d);
+    const ms = (v) => (v == null ? '–' : `${v.toFixed(1)} ms`);
+    $('modelMs').textContent = ms(m);
+    $('modelMs').classList.toggle('over', m != null && m > 50);
+    $('segMs').textContent = ms(sg);
+    $('dd3dMs').textContent = ms(dd);
+    // frames a second as they arrive (live), or the drive's own rate
+    const now = performance.now();
+    frameTimes = frameTimes.filter((x) => now - x < 2000);
+    $('modelHz').textContent = live ? `${(frameTimes.length / 2).toFixed(0)} Hz` : '20 Hz';
+    const sf = t.segFrames;
+    $('segHz').textContent = sf.length > 1 ? `${(E.FPS * (sf.length - 1) / Math.max(sf[sf.length - 1] - sf[0], 1)).toFixed(1)} Hz` : '–';
+    $('tracks').textContent = engine.state ? engine.state.tracks.length : '–';
+  }
+
+  function frame() {
+    if (source.tick) source.tick();
+    if (renderer) renderer.draw(engine.state, engine);
+    hud(engine.state);
+    requestAnimationFrame(frame);
+  }
+
+  function b64(s) {
+    const bin = atob(s), u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+  function take(u8) {
+    const msg = E.decode(u8);
+    engine.push(msg);
+    if (msg.kind === 'D') { lastData = performance.now(); frameTimes.push(lastData); }
+    if (msg.kind === 'M' && msg.meta.source) $('src').textContent = msg.meta.source.route ? `${msg.meta.source.route}` : '';
+  }
+
+  // ---- live: the server's event stream
+  function liveSource() {
+    $('back').hidden = false;
+    $('src').textContent = 'Live from the comma';
+    wait('Waiting for the comma…');
+    let es = null;
+    const open = () => {
+      es = new EventSource('events');
+      es.onmessage = (e) => take(b64(e.data));
+      es.addEventListener('off', (e) => wait(e.data || 'Diorama is off on this server.'));
+      es.onerror = () => { es.close(); wait('Reconnecting…'); setTimeout(open, 2000); };
+    };
+    open();
+    return { tick() { if (performance.now() - lastData < 2000) wait(''); else if ($('waiting').hidden) wait('Waiting for the comma…'); } };
+  }
+
+  // ---- a recorded drive, kept in step with its footage
+  async function driveSource(url, footageUrl) {
+    $('transport').hidden = false;
+    wait('Loading the drive…');
+    const buf = await (await fetch(url)).arrayBuffer();
+    const msgs = [...E.readFile(buf)];
+    const meta = msgs.find((m) => m.kind === 'M');
+    engine.push(meta);
+    $('src').textContent = meta.meta.source ? `${meta.meta.source.route}, from ${fmtTime(meta.meta.source.start / E.FPS)}` : url;
+    const frames = [];  // frame -> index of its drive message
+    msgs.forEach((m, i) => { if (m.kind === 'D') frames[m.frame] = i; });
+    const last = frames.length - 1, duration = (last + 1) / E.FPS;
+    let at = 0;  // the next message to push
+    let clock = 0, playing = false, lastNow = null;
+    const video = footageUrl ? $('footage') : null;
+    if (video) {
+      $('main').classList.add('side');
+      $('footagePane').hidden = false;
+      video.src = footageUrl;
+      video.addEventListener('play', () => ($('play').textContent = 'Pause'));
+      video.addEventListener('pause', () => ($('play').textContent = 'Play'));
+    }
+    $('seek').max = duration;
+    const now = () => (video ? video.currentTime : clock);
+    const replay = (target) => {
+      // back to a frame: start over a little before it, so the tracker and the road map have history
+      const from = Math.max(0, target - 200);
+      engine.reset();
+      at = frames[from] !== undefined ? frames[from] : 0;
+    };
+    $('play').onclick = () => {
+      if (video) { video.paused ? video.play() : video.pause(); return; }
+      playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play';
+    };
+    $('seek').oninput = () => { const t = Number($('seek').value); if (video) video.currentTime = t; else clock = t; };
+    document.addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); $('play').click(); } });
+    wait('');
+    return {
+      tick() {
+        if (!video) {
+          const t = performance.now();
+          if (playing && lastNow !== null) clock = Math.min(clock + (t - lastNow) / 1000, duration);
+          lastNow = t;
+        }
+        const target = Math.min(Math.floor(now() * E.FPS), last);
+        if (engine.frame > target || target - engine.frame > 200) replay(target);
+        while (at < msgs.length) {
+          const m = msgs[at];
+          if (m.kind === 'D' && m.frame > target) break;
+          engine.push(m);
+          at++;
+        }
+        $('seek').value = now();
+        $('time').textContent = `${fmtTime(now())} / ${fmtTime(duration)}`;
+      },
+    };
+  }
+
+  // ---- the Mac app, which pushes the server's messages itself
+  function bridgeSource() {
+    window.Diorama = { push: (s) => take(b64(s)), pushAll: (list) => list.forEach((s) => take(b64(s))), reset: () => engine.reset() };
+    wait('Waiting for the comma…');
+    try { window.webkit.messageHandlers.diorama.postMessage('ready'); } catch (e) { /* not in the app */ }
+    return { tick() { wait(performance.now() - lastData < 2000 ? '' : 'Waiting for the comma…'); } };
+  }
+
+  const live = !params.get('drive') && !params.get('bridge');
+  let source = { tick: null };
+  (async () => {
+    try {
+      const assets = await (await fetch('diorama-assets.bin')).arrayBuffer();
+      renderer = new DioramaRender.Renderer($('scene'), assets, theme);
+    } catch (e) {
+      $('main').innerHTML = `<div class="error">Diorama cannot draw here: ${e.message}</div>`;
+      return;
+    }
+    if (params.get('drive')) source = await driveSource(params.get('drive'), params.get('footage'));
+    else if (params.get('bridge')) source = bridgeSource();
+    else source = liveSource();
+    setInterval(stats, 500);
+    requestAnimationFrame(frame);
+  })();
+})();
+</script>
+</body>
+</html>

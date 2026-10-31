@@ -17,6 +17,7 @@ the guides give zoompilot's steps and settings.
 - [Daily use](using-jetlink.md): start, stop, and understand the comma's icon.
 - [Troubleshooting](troubleshooting.md): find a fix by symptom.
 - [Models](models.md): choose or download a model ahead of time.
+- [Diorama](diorama.md): the drive as a live 3-D miniature, on the web page, the Mac app, or your own recorded footage.
 - [Updates and rollback](releasing.md).
 
 [Cables and power](transport.md) · [Operating limits](status.md) ·

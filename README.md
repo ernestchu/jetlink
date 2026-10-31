@@ -71,6 +71,7 @@ Emulator demo.
 
 [Setup guides](docs/README.md#set-up) ·
 [Daily use](docs/using-jetlink.md) ·
+[Diorama](docs/diorama.md) ·
 [Troubleshooting](docs/troubleshooting.md) ·
 [Operating limits](docs/status.md)
 

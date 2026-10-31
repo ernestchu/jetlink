@@ -4,13 +4,14 @@ import SwiftUI
 
 /// The places in the app.
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
-  case status, models, benchmark, logs
+  case status, diorama, models, benchmark, logs
 
   var id: String { rawValue }
 
   var title: String {
     switch self {
     case .status: "Status"
+    case .diorama: "Diorama"
     case .models: "Models"
     case .benchmark: "Benchmark"
     case .logs: "Logs"
@@ -20,6 +21,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
   var symbol: String {
     switch self {
     case .status: "gauge.with.dots.needle.33percent"
+    case .diorama: "cube.transparent"
     case .models: "shippingbox"
     case .benchmark: "stopwatch"
     case .logs: "doc.text"
@@ -92,6 +94,7 @@ struct MainWindow: View {
     @Bindable var navigation = navigation
     switch navigation.selection ?? .status {
     case .status: StatusView(selection: $navigation.selection)
+    case .diorama: DioramaView()
     case .models: ModelsView()
     case .benchmark: BenchmarkView()
     case .logs: LogsView()
