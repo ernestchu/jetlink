@@ -23,6 +23,20 @@ public enum DioramaPackets {
     return data
   }
 
+  /// What the models see, for a debug view: u32 frame, u16 width, u16
+  /// height, u8 planes, then the packed narrow frame as the comma sends it
+  /// (four Y planes, U, V, each `width` by `height`). Live only.
+  public static func input(frame: UInt32, packed: [UInt8], width: Int = 256, height: Int = 128) -> Data {
+    var data = Data(capacity: 10 + packed.count)
+    data.append(UInt8(ascii: "I"))
+    data.appendLE(frame)
+    data.appendLE(UInt16(width))
+    data.appendLE(UInt16(height))
+    data.append(UInt8(packed.count / (width * height)))
+    data.append(contentsOf: packed)
+    return data
+  }
+
   /// u32 frame, f32 seconds, f32 model ms, then the floats.
   public static func drive(frame: UInt32, seconds: Float, modelMs: Float, values: [Float]) -> Data {
     var data = Data(capacity: 13 + 4 * values.count)

@@ -230,9 +230,10 @@
         return nil
       case ("GET", "/diorama"):
         return PageResponse.whole(301, type: "text/plain", body: Data(), headers: [("Location", "/diorama/")])
-      case ("GET", "/diorama/events"):
+      case ("GET", "/diorama/events"), ("GET", "/diorama/events/frames"):
         guard mayWatch else { return PageServer.signInFirst }
-        dioramaStream(client)
+        // .../frames: the frames the models see as well, for the page's Model input view
+        dioramaStream(client, input: head.path.hasSuffix("/frames"))
         return nil
       case ("GET", let path) where path.hasPrefix("/diorama/"):
         let name = path == "/diorama/" ? "diorama.html" : String(path.dropFirst("/diorama/".count))
@@ -516,13 +517,13 @@
 
     /// Diorama's messages as Server-Sent Events, each base64 in a `data:`
     /// line. Without a stage, one `off` event says why, and the stream ends.
-    private func dioramaStream(_ client: Int32) {
+    private func dioramaStream(_ client: Int32, input: Bool = false) {
       guard let diorama else {
         let off = "event: off\ndata: Diorama is off on this server. Start jetlink-server with --diorama and the models' folder.\n\n"
         _ = write(client, PageResponse.head(200, type: "text/event-stream") + Data(off.utf8))
         return
       }
-      let watcher = diorama.watch()
+      let watcher = diorama.watch(input: input)
       defer { diorama.unwatch(watcher) }
       guard write(client, PageResponse.head(200, type: "text/event-stream") + Data("retry: 2000\n\n".utf8)) else { return }
       while let messages = diorama.next(watcher, timeout: keepalive) {

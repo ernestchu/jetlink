@@ -151,7 +151,8 @@ without a restart. A download stopped part way keeps the files it finished.
 To use models you exported yourself ([above](#export-the-models)), choose
 their folder in **Settings > General > Diorama** and restart the server.
 
-**Diorama** then shows the drive. The models run as native CoreML programs on
+**Diorama** then shows the drive. **Model input**, beside the timings, shows the
+frame the models see: the narrow camera warped to 512×256, ten times a second. The models run as native CoreML programs on
 the GPU, so the Neural Engine stays the driving model's. CoreML compiles them
 the first time the view opens, in a few seconds, and keeps the compile in the
 cache folder's `diorama/`. A folder without the CoreML packages runs the ONNX
@@ -213,6 +214,7 @@ stream, each is one base64 `data:` line.
 | `S` seg | u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] class (255 dropped), u8[queries] score × 255, u32 runs, then (u8 query, u8 length − 1) per run |
 | `B` boxes | u32 frame, f32 ms, u16 rows, f32[rows × 16] DD3D rows (`diorama/export.py` names the columns) |
 | `T` status | UTF-8: what the models are doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only: the page shows it beside the timings when they are not running |
+| `I` input | u32 frame, u16 width, u16 height, u8 planes, then the packed narrow frame the models see (four Y planes, U, V). Live only, and only to a page that asks: the Mac view's **Model input** toggle, or the web page's on `/diorama/events/frames` |
 
 `diorama/packets.py` writes them and diorama-engine.js reads them.
 `DioramaPackets.swift` matches the Python byte for byte, which

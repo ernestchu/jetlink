@@ -60,6 +60,14 @@
   .stat.note { flex: 1 1 240px; min-width: 0; }
   .stat.note b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .stat.note b.off { color: var(--bad); }
+  .debug { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); cursor: pointer; user-select: none; }
+  .debug[hidden] { display: none; }
+  .inputview { position: absolute; right: 14px; bottom: 14px; width: min(46%, 512px); border-radius: 8px; overflow: hidden;
+    background: #000; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35); pointer-events: none; }
+  .inputview[hidden] { display: none; }
+  .inputview canvas { width: 100%; height: auto; aspect-ratio: 2 / 1; display: block; image-rendering: pixelated; }
+  .inputview span { position: absolute; left: 8px; top: 6px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000;
+    font-variant-numeric: tabular-nums; }
   .transport { display: flex; align-items: center; gap: 10px; flex: 1 1 320px; min-width: 0; }
   .transport input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
   button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
@@ -86,6 +94,7 @@
       <div class="lead" id="lead"></div>
       <div class="mode" id="mode"></div>
     </div>
+    <div class="inputview" id="inputView" hidden><canvas id="inputCanvas" width="512" height="256"></canvas><span id="inputLabel"></span></div>
     <div class="waiting" id="waiting">Loading…</div>
   </div>
 </main>
@@ -97,6 +106,7 @@
   <div class="stat"><b id="dd3dMs">–</b><span>Headings (DD3D)</span></div>
   <div class="stat"><b id="tracks">–</b><span>Tracked</span></div>
   <div class="stat note" id="modelsNote" hidden><b id="modelsState"></b><span>Models</span></div>
+  <label class="debug" id="inputToggle" hidden title="The frame the models see: the narrow camera, warped to 512×256"><input type="checkbox" id="showInput"> Model input</label>
   <div class="transport" id="transport" hidden>
     <button id="play">Play</button>
     <input type="range" id="seek" min="0" max="1" step="0.05" value="0">
@@ -166,6 +176,41 @@
     if (msg.kind === 'D') { lastData = performance.now(); frameTimes.push(lastData); }
     if (msg.kind === 'M' && msg.meta.source) $('src').textContent = msg.meta.source.route ? `${msg.meta.source.route}` : '';
     if (msg.kind === 'T') models(msg.text);
+    if (msg.kind === 'I' && $('showInput').checked) drawInput(msg);
+  }
+
+  // ---- debug: the frame the models see, the packed narrow frame unpacked to 512x256 RGB (BT.601, video range)
+  let inputImage = null;
+  function drawInput(msg) {
+    const { w, h, packed } = msg, W = 2 * w, H = 2 * h, plane = w * h, ctx = $('inputCanvas').getContext('2d');
+    if (!inputImage || inputImage.width !== W) inputImage = ctx.createImageData(W, H);
+    const px = inputImage.data;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        // the four Y planes are Y[0::2, 0::2], Y[1::2, 0::2], Y[0::2, 1::2], Y[1::2, 1::2]
+        const at = (y >> 1) * w + (x >> 1), c = (packed[((y & 1) + 2 * (x & 1)) * plane + at] - 16) * 1.164;
+        const u = packed[4 * plane + at] - 128, v = packed[5 * plane + at] - 128, o = 4 * (y * W + x);
+        px[o] = c + 1.596 * v; px[o + 1] = c - 0.391 * u - 0.813 * v; px[o + 2] = c + 2.018 * u; px[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(inputImage, 0, 0);
+    $('inputLabel').textContent = `model input · ${W}×${H} · frame ${msg.frame}`;
+  }
+
+  // the toggle: remembered here, and the source asks the server for the frames only while it is on
+  function inputToggle(ask) {
+    let on = false;
+    try { on = localStorage.getItem('diorama.input') === '1'; } catch (e) { /* storage off */ }
+    $('showInput').checked = on;
+    $('inputView').hidden = !on;
+    $('inputToggle').hidden = false;
+    $('showInput').onchange = () => {
+      const now = $('showInput').checked;
+      try { localStorage.setItem('diorama.input', now ? '1' : '0'); } catch (e) { /* storage off */ }
+      $('inputView').hidden = !now;
+      ask(now);
+    };
+    return on;
   }
 
   // the server's models, when they are not simply running: preparing, paused, or off and why
@@ -183,13 +228,14 @@
     $('back').hidden = false;
     $('src').textContent = 'Live from the comma';
     wait('Waiting for the comma…');
-    let es = null;
+    let es = null, input = false;
     const open = () => {
-      es = new EventSource('events');
+      es = new EventSource(input ? 'events/frames' : 'events');
       es.onmessage = (e) => take(b64(e.data));
       es.addEventListener('off', (e) => wait(e.data || 'Diorama is off on this server.'));
       es.onerror = () => { es.close(); wait('Reconnecting…'); setTimeout(open, 2000); };
     };
+    input = inputToggle((on) => { input = on; es.close(); open(); });
     open();
     return { tick() { if (performance.now() - lastData < 2000) wait(''); else if ($('waiting').hidden) wait('Waiting for the comma…'); } };
   }
@@ -256,7 +302,9 @@
   function bridgeSource() {
     window.Diorama = { push: (s) => take(b64(s)), pushAll: (list) => list.forEach((s) => take(b64(s))), reset: () => engine.reset() };
     wait('Waiting for the comma…');
-    try { window.webkit.messageHandlers.diorama.postMessage('ready'); } catch (e) { /* not in the app */ }
+    const post = (m) => { try { window.webkit.messageHandlers.diorama.postMessage(m); } catch (e) { /* not in the app */ } };
+    post('ready');
+    if (inputToggle((on) => post(on ? 'input:on' : 'input:off'))) post('input:on');
     return { tick() { wait(performance.now() - lastData < 2000 ? '' : 'Waiting for the comma…'); } };
   }
 
