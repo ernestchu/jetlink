@@ -232,11 +232,6 @@ struct DioramaStageTests {
     #expect(Array(message[1..<10]) == [0, 0, 0, 0, 0, 1, 128, 0, 6])  // frame 0, 256 by 128, 6 planes
     #expect(message.dropFirst(10).allSatisfy { $0 == 77 })
     #expect(!collect(stage, plain, 4).contains { $0.first == UInt8(ascii: "I") })
-    stage.showInput(debug, false)
-    stage.showInput(plain, true)
-    serve(stage, frame: 2)
-    #expect(collect(stage, plain, 3).contains { $0.first == UInt8(ascii: "I") })
-    #expect(!collect(stage, debug, 3).contains { $0.first == UInt8(ascii: "I") })
   }
 
   @Test("A slow driving frame pauses the models")

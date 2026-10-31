@@ -73,7 +73,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     fileprivate var queue: [Data] = []
     fileprivate var dropped = false
     fileprivate var closed = false
-    /// It also wants the frames the models see (`input` messages), a debug view's.
+    /// It also wants the frames the models see (`input` messages): the web page's Model input view.
     fileprivate var input = false
   }
 
@@ -143,7 +143,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   // MARK: watchers
 
   /// A new watcher, its queue starting with the meta message and the models'
-  /// status. `input`: the frames the models see as well (`showInput`).
+  /// status. `input`: the frames the models see as well, the packed narrow
+  /// frame, 196 KB ten times a second, so only for a debug view showing it.
   public func watch(input: Bool = false) -> Watcher {
     let w = Watcher()
     w.input = input
@@ -158,14 +159,6 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     frameLock.unlock()
     wake.signal()
     return w
-  }
-
-  /// Whether `w` also gets the frames the models see: the packed narrow
-  /// frame, 196 KB ten times a second, so only while a debug view shows it.
-  public func showInput(_ w: Watcher, _ on: Bool) {
-    watchLock.lock()
-    w.input = on
-    watchLock.unlock()
   }
 
   public func unwatch(_ w: Watcher) {
