@@ -4,7 +4,7 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-Exports Diorama's two perception networks to ONNX, in the form every jetlink
+Exports Diorama's two perception models to ONNX, in the form every jetlink
 backend runs (TensorRT, onnxruntime with CoreML, onnxruntime's CPU provider):
 
 - diorama_seg.onnx: Mask2Former (Swin-L, Mapillary Vistas panoptic).
@@ -236,7 +236,7 @@ def dd3d_module(weights: str):
 
     def forward(self, packed):
       rgb = unpack_rgb(packed.float())
-      x = (rgb[:, [2, 1, 0]] - self.net.pixel_mean) / self.net.pixel_std  # the network was trained on BGR
+      x = (rgb[:, [2, 1, 0]] - self.net.pixel_mean) / self.net.pixel_std  # the model was trained on BGR
       feats = self.net.backbone(x)
       out2d, out3d = self.net.fcos2d_head(feats), self.net.fcos3d_head(feats)
       flat = lambda t, c: t[0].permute(1, 2, 0).reshape(-1, c)  # noqa: E731

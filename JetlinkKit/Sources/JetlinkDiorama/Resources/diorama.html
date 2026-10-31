@@ -96,7 +96,7 @@
   <div class="stat"><b id="segHz">–</b><span>Perception</span></div>
   <div class="stat"><b id="dd3dMs">–</b><span>Headings (DD3D)</span></div>
   <div class="stat"><b id="tracks">–</b><span>Tracked</span></div>
-  <div class="stat note" id="netNote" hidden><b id="netState"></b><span>Networks</span></div>
+  <div class="stat note" id="modelsNote" hidden><b id="modelsState"></b><span>Models</span></div>
   <div class="transport" id="transport" hidden>
     <button id="play">Play</button>
     <input type="range" id="seek" min="0" max="1" step="0.05" value="0">
@@ -165,13 +165,13 @@
     engine.push(msg);
     if (msg.kind === 'D') { lastData = performance.now(); frameTimes.push(lastData); }
     if (msg.kind === 'M' && msg.meta.source) $('src').textContent = msg.meta.source.route ? `${msg.meta.source.route}` : '';
-    if (msg.kind === 'T') networks(msg.text);
+    if (msg.kind === 'T') models(msg.text);
   }
 
-  // the server's networks, when they are not simply running: preparing, paused, or off and why
-  function networks(text) {
-    const show = text && text !== 'running' && text !== 'idle', b = $('netState');
-    $('netNote').hidden = !show;
+  // the server's models, when they are not simply running: preparing, paused, or off and why
+  function models(text) {
+    const show = text && text !== 'running' && text !== 'idle', b = $('modelsState');
+    $('modelsNote').hidden = !show;
     if (!show) return;
     b.textContent = text[0].toUpperCase() + text.slice(1);
     b.title = b.textContent;

@@ -77,7 +77,7 @@ final class AppSettings {
     didSet { defaults.set(keepAwakeLidClosed, forKey: Key.keepAwakeLidClosed) }
   }
 
-  /// Diorama's networks, as `python -m diorama export` writes them. Read
+  /// Diorama's models, as `python -m diorama export` writes them. Read
   /// when the server starts.
   var dioramaFolder: URL {
     didSet { defaults.set(dioramaFolder.path(percentEncoded: false), forKey: Key.dioramaFolder) }

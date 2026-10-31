@@ -64,10 +64,10 @@
     var noCPUKeepWarm = false
     @Option(
       help: ArgumentHelp(
-        "Diorama: draw the drive on the web page's /diorama/, from the networks `python -m diorama export` wrote to this folder. They run only while a page watches, and pause when a driving frame runs slow.",
+        "Diorama: draw the drive on the web page's /diorama/, from the models `python -m diorama export` wrote to this folder. They run only while a page watches, and pause when a driving frame runs slow.",
         valueName: "dir"))
     var diorama: String?
-    @Option(help: "Diorama pauses its networks for 3 s after a driving frame slower than this many ms; 0 never pauses.")
+    @Option(help: "Diorama pauses its models for 3 s after a driving frame slower than this many ms; 0 never pauses.")
     var dioramaPauseMs = 40.0
     @Option(help: "debug, info, warning or error.")
     var logLevel = Log.Level.info
@@ -156,14 +156,14 @@
     /// open page never starts a catalog fetch, a download or a build by
     /// itself. Without its page it stays off: the comma matters more than a
     /// page.
-    /// Diorama's stage on the server's frames, its networks built for the
+    /// Diorama's stage on the server's frames, its models built for the
     /// backend serving the comma: TensorRT plans in the cache's diorama/, or
     /// onnxruntime on the GPU through CoreML (the CPU on Linux). Nil, with
     /// the reason logged, when it cannot run here.
     private func startDiorama(_ folder: URL, backend: any EngineBackend, server: Server, log: ServerLog) -> DioramaStage? {
-      let networks: DioramaStage.Networks
+      let models: DioramaStage.Models
       do {
-        networks = try DioramaStage.Networks(folder: folder)
+        models = try DioramaStage.Models(folder: folder)
       } catch {
         log.warning("no Diorama: \(error)")
         return nil
@@ -191,10 +191,10 @@
       }
       var limits = DioramaStage.Limits()
       limits.slowFrameUs = dioramaPauseMs > 0 ? UInt32(dioramaPauseMs * 1000) : .max
-      let stage = DioramaStage(networks: networks, limits: limits, makeEngine: factory)
+      let stage = DioramaStage(models: models, limits: limits, makeEngine: factory)
       stage.start()
       server.host.frameObserver = stage
-      log.info("Diorama on /diorama/, networks from \(folder.path)")
+      log.info("Diorama on /diorama/, models from \(folder.path)")
       return stage
     }
 

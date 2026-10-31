@@ -250,7 +250,7 @@ class DD3D(nn.Module):
     return m.to(device).eval()
 
   def heads(self, x):
-    """Network part (fixed shapes for a fixed input size: can be replaced by a CUDA-graph replay)."""
+    """Model part (fixed shapes for a fixed input size: can be replaced by a CUDA-graph replay)."""
     with torch.autocast('cuda', dtype=torch.float16, enabled=x.device.type == 'cuda'):
       feats = self.backbone(x)
       return self.fcos2d_head(feats), self.fcos3d_head(feats)

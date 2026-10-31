@@ -5,7 +5,7 @@ sees. You get the planned path, lane lines, road edges and the lead car, along
 with the cars, people and road around them. It is all computer-drawn: no camera
 footage appears in it.
 
-<a href="images/diorama.webp"><img src="images/diorama.webp" width="100%" alt="A recorded drive in the Diorama viewer: the road camera on the left, Diorama's bird's-eye view on the right with the lead car in blue, parked cars along the road and the planned path; below, the driving model's and the networks' timings"></a>
+<a href="images/diorama.webp"><img src="images/diorama.webp" width="100%" alt="A recorded drive in the Diorama viewer: the road camera on the left, Diorama's bird's-eye view on the right with the lead car in blue, parked cars along the road and the planned path; below, the driving model's and Diorama's models' timings"></a>
 
 It runs in three places, all with the same page:
 
@@ -19,7 +19,7 @@ It runs in three places, all with the same page:
 
 The comma already sends the server two things each frame: the warped narrow
 camera image and the driving model's inputs. The server answers with the model's
-outputs. Diorama adds two networks that run on the same warped image:
+outputs. Diorama adds two models that run on the same warped image:
 
 - **Segmentation:** Mask2Former (Swin-L, Mapillary Vistas panoptic), on every
   other frame (10 Hz). It finds the road surface, paint, crosswalks, curbs and
@@ -41,18 +41,18 @@ The view sits behind the car at speed and pans to a bird's-eye view below
 **The comma comes first:**
 
 - The server hands Diorama the frame only after the reply has gone to the comma.
-- The networks run only while a page or the Mac view is open.
+- The models run only while a page or the Mac view is open.
 - They pause for 3 s after any driving frame slower than 40 ms
   (`--diorama-pause-ms`), since they share the GPU with the driving model.
 
-## Export the networks
+## Export the models
 
 Once, on a computer with Python 3.10+, PyTorch, `transformers` and `onnx`
 (a GPU is not needed):
 
 ```bash
 python3 -m pip install torch transformers onnx
-python3 -m diorama export --out ~/diorama-networks
+python3 -m diorama export --out ~/diorama-models
 ```
 
 This writes three files, about 1.3 GB:
@@ -75,13 +75,13 @@ copy you have. `--no-dd3d` leaves DD3D out, and cars then face along their lane.
 
 `python -m diorama run` takes a drive's segment folders from the comma's
 `/data/media/0/realdata`, with `fcamera.hevc` and `ecamera.hevc` in each. It
-runs the drive through a driving model and the networks exactly as a server
+runs the drive through a driving model and Diorama's models exactly as a server
 would see it, then plays the result in your browser beside the footage:
 
 ```bash
 python3 -m pip install onnxruntime-gpu opencv-python numpy   # onnxruntime on a Mac; ffmpeg on the PATH
 python3 -m diorama run ~/drives/<route>--{3,4,5} \
-  --model ~/models/big_driving_supercombo.onnx --nets ~/diorama-networks \
+  --model ~/models/big_driving_supercombo.onnx --models ~/diorama-models \
   --out ~/diorama-drive --start 30 --seconds 120
 python3 -m diorama view ~/diorama-drive
 ```
@@ -104,7 +104,7 @@ by frame at 20 Hz, exactly as a comma would. The server's live Diorama page then
 shows it, so you can try the live path at a desk:
 
 ```bash
-jetlink-server --listen --status-port 8080 --diorama ~/diorama-networks
+jetlink-server --listen --status-port 8080 --diorama ~/diorama-models
 python3 -m diorama replay ~/drives/<route>--3 --model ~/models/big_driving_supercombo.onnx --host 127.0.0.1
 # open http://127.0.0.1:8080/diorama/
 ```
@@ -116,43 +116,43 @@ options. For the installed service, put the folder in `/etc/jetlink/server.env`
 and the option on the service's command line:
 
 ```bash
-jetlink-server --usb --backend trt --status-port 5600 --diorama /mnt/data/diorama-networks
+jetlink-server --usb --backend trt --status-port 5600 --diorama /mnt/data/diorama-models
 ```
 
 - **First run:** the first time a page opens Diorama, the server builds the two
-  networks' TensorRT plans into the cache's `diorama/`. That takes about four
+  models' TensorRT plans into the cache's `diorama/`. That takes about four
   minutes on an RTX 4090, and longer on a Jetson. Until then the page draws the
-  model's road and lead without the networks.
+  driving model's road and lead without Diorama's models.
 - **Address:** `http://<host>:5600/diorama/`.
 - **Sign-in:** with a [web password](control-protocol.md#the-web-page), the page
   needs the sign-in, as the status page does.
 
 ## Mac
 
-Open **Diorama** in the sidebar (⌘5) and click **Download Networks…**. The app
-names the networks' licenses and their size, and on **Agree and Download**
+Open **Diorama** in the sidebar (⌘5) and click **Download Models…**. The app
+names the models' licenses and their size, and on **Agree and Download**
 fetches them from [`ernestchu/jetlink-diorama`](https://huggingface.co/ernestchu/jetlink-diorama)
 on Hugging Face into **Settings > General > Diorama**'s folder. Each graph is
 checked against the repo's SHA-256 as it arrives, and the running server picks
 them up without a restart. A download stopped part way keeps the graphs it
 finished.
 
-To use networks you exported yourself ([above](#export-the-networks)), choose
+To use models you exported yourself ([above](#export-the-models)), choose
 their folder in **Settings > General > Diorama** and restart the server.
 
-**Diorama** then shows the drive. The networks run through
+**Diorama** then shows the drive. The models run through
 CoreML on the GPU, so the Neural Engine stays the driving model's. CoreML
 compiles them the first time the view opens, which takes a few minutes; the
 compile is kept in the cache folder's `diorama/`.
 
-### Publish the networks for the app
+### Publish the models for the app
 
 The Mac app downloads what `ernestchu/jetlink-diorama` holds: `diorama.json`
 and the graphs it names, from the repo's `main`. After an export, upload the
 folder as it is, with the licenses above on the model card:
 
 ```bash
-hf upload ernestchu/jetlink-diorama ~/diorama-networks . --repo-type model
+hf upload ernestchu/jetlink-diorama ~/diorama-models . --repo-type model
 ```
 
 The app reads each graph's SHA-256 and size from the repo's file listing, so
@@ -193,11 +193,11 @@ stream, each is one base64 `data:` line.
 
 | Kind | Fields |
 | --- | --- |
-| `M` meta | JSON: the frame's camera, the drive fields and their float counts, the networks' classes |
+| `M` meta | JSON: the frame's camera, the drive fields and their float counts, the models' classes |
 | `D` drive | u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs |
 | `S` seg | u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] class (255 dropped), u8[queries] score × 255, u32 runs, then (u8 query, u8 length − 1) per run |
 | `B` boxes | u32 frame, f32 ms, u16 rows, f32[rows × 16] DD3D rows (`diorama/export.py` names the columns) |
-| `T` status | UTF-8: what the networks are doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only: the page shows it beside the timings when they are not running |
+| `T` status | UTF-8: what the models are doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only: the page shows it beside the timings when they are not running |
 
 `diorama/packets.py` writes them and diorama-engine.js reads them.
 `DioramaPackets.swift` matches the Python byte for byte, which

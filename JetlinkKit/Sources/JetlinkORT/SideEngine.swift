@@ -2,7 +2,7 @@ import Foundation
 import JetlinkServer
 
 extension OrtBackend {
-  /// A graph that runs beside the driving model, as Diorama's networks do:
+  /// A graph that runs beside the driving model, as Diorama's models do:
   /// one session, on the GPU through CoreML where there is one (the Neural
   /// Engine stays the driving model's), else onnxruntime's CPU provider.
   /// CoreML keeps its compile in `cache`, under the graph's COREML_CACHE_KEY,

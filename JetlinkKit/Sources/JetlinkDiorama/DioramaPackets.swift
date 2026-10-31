@@ -16,7 +16,7 @@ public enum DioramaPackets {
     return data
   }
 
-  /// What the networks are doing (preparing, running, paused, off and why), as UTF-8: live only.
+  /// What the models are doing (preparing, running, paused, off and why), as UTF-8: live only.
   public static func status(_ text: String) -> Data {
     var data = Data("T".utf8)
     data.append(Data(text.utf8))

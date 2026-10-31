@@ -4,13 +4,13 @@ import Foundation
   import FoundationNetworking
 #endif
 
-/// Diorama's networks, as `python -m diorama export` writes them, from the
+/// Diorama's models, as `python -m diorama export` writes them, from the
 /// Hugging Face repo they are published in: diorama.json and the graphs it
 /// names. The repo's tree gives each graph's sha256 and size, and each is
 /// fetched as a model is, to a .part that is hashed as it arrives.
-/// diorama.json goes in last, so a folder is never a set of networks a
+/// diorama.json goes in last, so a folder is never a set of models a
 /// server would load until every graph it names is there and whole.
-public enum DioramaNetworks {
+public enum DioramaModels {
   public static let repo = "ernestchu/jetlink-diorama"
   public static let manifest = "diorama.json"
   static let manifestMax = 1 << 20

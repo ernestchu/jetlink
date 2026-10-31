@@ -518,7 +518,7 @@
     /// line. Without a stage, one `off` event says why, and the stream ends.
     private func dioramaStream(_ client: Int32) {
       guard let diorama else {
-        let off = "event: off\ndata: Diorama is off on this server. Start jetlink-server with --diorama and the networks' folder.\n\n"
+        let off = "event: off\ndata: Diorama is off on this server. Start jetlink-server with --diorama and the models' folder.\n\n"
         _ = write(client, PageResponse.head(200, type: "text/event-stream") + Data(off.utf8))
         return
       }
