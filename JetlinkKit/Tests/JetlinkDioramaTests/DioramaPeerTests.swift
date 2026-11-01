@@ -82,7 +82,7 @@
       }
     }
 
-    @Test("A viewer that is ready gets the meta, then the drive and the segmentation, and is listed by name")
+    @Test("A viewer that is ready gets the meta, then the drive and the segmentation and nothing else, and is listed by name")
     func watching() throws {
       let rig = try Rig()
       defer { rig.stop() }
@@ -91,22 +91,25 @@
       #expect(rig.wait { rig.kinds().first == "M" })
       rig.serve(0..<6)
       #expect(rig.wait { rig.kinds().filter { $0 == "D" }.count == 6 && rig.kinds().contains("S") })
-      #expect(!rig.kinds().contains("I"))
+      // the models' status is not for drawing: it stays on the Mac
+      #expect(Set(rig.kinds()) == ["M", "D", "S"])
       #expect(rig.states.withLock { $0 }.contains(.watching("test")))
     }
 
-    @Test("The Model input toggle brings the frames the models see, from a fresh meta")
-    func input() throws {
+    @Test("A viewer that asks for the frames the models see is never sent them")
+    func noInput() throws {
       let rig = try Rig()
       defer { rig.stop() }
       try rig.connect()
       #expect(rig.wait { rig.kinds().first == "M" })
-      rig.watch.send("input:on")
-      #expect(rig.wait { rig.viewers.withLock { $0.first?.input } == true })
+      // what an older viewer's Model input toggle sends: a plain ready, from a fresh meta
       rig.got.withLock { $0.removeAll() }
-      rig.serve(0..<4)
-      #expect(rig.wait { rig.kinds().contains("I") })
-      #expect(rig.kinds().first == "M")
+      rig.watch.send("input:on")
+      #expect(rig.wait { rig.kinds().first == "M" })
+      rig.serve(0..<6)
+      #expect(rig.wait { rig.kinds().filter { $0 == "S" }.count >= 2 })
+      #expect(!rig.kinds().contains("I"))
+      #expect(!rig.kinds().contains("T"))
     }
 
     @Test("A new stage: the viewer stays connected and starts over from its meta")

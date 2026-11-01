@@ -67,7 +67,8 @@ private struct DioramaFromMac: View {
   @Environment(AppModel.self) private var app
 
   var body: some View {
-    DioramaWebView(feed: app.dioramaRemote)
+    // a Mac never sends the frames the models see, so the page offers no Model input
+    DioramaWebView(feed: app.dioramaRemote, modelInput: false)
       .ignoresSafeArea(edges: .horizontal)
       .overlay(alignment: .top) {
         if let note {

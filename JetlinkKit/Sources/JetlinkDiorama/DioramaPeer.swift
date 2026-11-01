@@ -9,12 +9,12 @@
   ///
   /// The Mac advertises `serviceType` over Bonjour, and peer to peer (AWDL)
   /// as well as on any network the two share; the iPhone browses for it. What
-  /// crosses is the stage's messages, not video: each after its u32
-  /// little-endian length, exactly as a drive.diorama holds them, about 180 KB
-  /// a second (1.8 MB with Model input). The viewer sends the same framing
-  /// back with what its page posts (`hello:` and its name, `ready`,
-  /// `input:on`, `input:off`), and each
-  /// viewer gets a watcher of its own from `ready` on.
+  /// crosses is only what the page draws with (`rendering`): the meta, the
+  /// driving model's outputs and the segmentation, never the camera's frames
+  /// nor the models' status. Each is after its u32 little-endian length,
+  /// exactly as a drive.diorama holds them, about 180 KB a second. The
+  /// viewer sends the same framing back, `hello:` and its name and then
+  /// `ready`, and gets a watcher of its own from `ready` on.
   ///
   /// Neither end queues more than it can hand on: the viewer reads again
   /// only once its page has taken the last batch, and the Mac sends again
@@ -26,6 +26,11 @@
     /// A viewer's line, and a message: anything longer ends the connection.
     static let maxControl = 4096
     static let maxMessage = 8 << 20
+
+    /// The messages a viewer is sent: `M` meta, `D` drive and `S` seg, which
+    /// the page draws the drive from. `I`, the frames the models see, and
+    /// `T`, what they are doing, stay on the Mac.
+    public static let rendering: Set<UInt8> = [UInt8(ascii: "M"), UInt8(ascii: "D"), UInt8(ascii: "S")]
 
     /// TCP over AWDL as well as infrastructure Wi-Fi, without Nagle, and with
     /// keepalives short enough that a phone that drove off is noticed in seconds.
@@ -90,8 +95,6 @@
       /// What it said it is (`hello:`), or its address.
       public let name: String
       public let address: String
-      /// It asked for the frames the models see too.
-      public let input: Bool
     }
 
     /// Called on the broadcaster's queue whenever a viewer comes, goes or changes.
@@ -196,7 +199,6 @@
       private var stage: DioramaStage?
       private var watcher: DioramaStage.Watcher?
       private var name: String?
-      private var input = false
       private var asked = false
       private var closed = false
 
@@ -219,7 +221,7 @@
       var viewer: DioramaBroadcaster.Viewer {
         lock.lock()
         defer { lock.unlock() }
-        return .init(id: id, name: name ?? address, address: address, input: input)
+        return .init(id: id, name: name ?? address, address: address)
       }
 
       func start() {
@@ -278,14 +280,15 @@
       }
 
       /// What the viewer's page posted: from `ready` on, a watcher, made
-      /// again with the frames the models see when the toggle changes.
+      /// again from a fresh meta when the page asks again (it reloaded).
+      /// An older viewer's `input:on` is a plain `ready`: the frames the
+      /// models see never leave the Mac.
       private func control(_ line: String) {
         lock.lock()
         if line.hasPrefix("hello:") {
           name = String(line.dropFirst(6).prefix(64))
         } else if line == "ready" || line == "input:on" || line == "input:off" {
           asked = true
-          input = line == "input:on"
           if let watcher, let stage { stage.unwatch(watcher) }
           watcher = nil
         }
@@ -306,7 +309,7 @@
             _ = wake.wait(timeout: .now() + 1)
             continue
           }
-          let w = watcher ?? stage.watch(input: input)
+          let w = watcher ?? stage.watch(input: false)
           watcher = w
           lock.unlock()
 
@@ -321,9 +324,10 @@
             _ = wake.wait(timeout: .now() + 0.2)
             continue
           }
-          if batch.isEmpty { continue }
+          let drawn = batch.filter { $0.first.map(DioramaPeer.rendering.contains) ?? false }
+          if drawn.isEmpty { continue }
           let sent = DispatchSemaphore(value: 0)
-          connection.send(content: DioramaPeer.frame(batch), completion: .contentProcessed { _ in sent.signal() })
+          connection.send(content: DioramaPeer.frame(drawn), completion: .contentProcessed { _ in sent.signal() })
           sent.wait()
         }
       }
@@ -419,7 +423,7 @@
       }
     }
 
-    /// What the page posted (`ready`, `input:on`, `input:off`): sent now, and again on each new connection.
+    /// What the page posted (`ready`): sent now, and again on each new connection.
     public func send(_ line: String) {
       queue.async { [self] in
         control = line

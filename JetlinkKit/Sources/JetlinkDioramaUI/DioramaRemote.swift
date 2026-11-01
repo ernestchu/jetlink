@@ -54,9 +54,10 @@
 
     // MARK: DioramaFeed
 
+    /// `input` is ignored: a Mac sends only what the page draws with, never the frames the models see.
     public func start(input: Bool, deliver: @escaping @MainActor @Sendable ([Data]) async -> Void) {
       self.deliver = deliver
-      watch.send(input ? "input:on" : "input:off")
+      watch.send("ready")
     }
 
     public func stop() {

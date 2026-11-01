@@ -101,7 +101,7 @@ struct DioramaViewersButton: View {
         } else {
           ForEach(server.dioramaViewers) { viewer in
             LabeledContent(viewer.name) {
-              Text(viewer.input ? "\(viewer.address), with model input" : viewer.address).foregroundStyle(.secondary)
+              Text(viewer.address).foregroundStyle(.secondary)
             }
           }
           Button("Disconnect All") { server.disconnectDioramaViewers() }
