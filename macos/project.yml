@@ -43,7 +43,7 @@ targets:
     # app shares, and the Swift server it runs, in process, on onnxruntime.
     dependencies:
       - package: JetlinkKit
-        products: [JetlinkKit, JetlinkUI, JetlinkServer, JetlinkORT, JetlinkDiorama, JetlinkRegistry]
+        products: [JetlinkKit, JetlinkUI, JetlinkServer, JetlinkORT, JetlinkDiorama, JetlinkDioramaUI, JetlinkRegistry]
       - package: Sparkle
     info:
       path: Resources/Info.plist
@@ -60,6 +60,9 @@ targets:
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
         NSPrincipalClass: NSApplication
+        # Diorama on iPhones nearby, peer to peer: Settings > General > Diorama.
+        NSLocalNetworkUsageDescription: Jetlink shows the drive's Diorama on your iPhone nearby.
+        NSBonjourServices: [_jetlink-diorama._tcp]
         CFBundleIconName: AppIcon
         # Sparkle: the feed and its key are build settings (below). Checks run
         # daily without the second-launch prompt; nothing installs unless the

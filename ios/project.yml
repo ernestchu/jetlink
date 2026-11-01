@@ -38,7 +38,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: JetlinkKit
-        products: [JetlinkKit, JetlinkUI, JetlinkRegistry, JetlinkServer, JetlinkORT]
+        products: [JetlinkKit, JetlinkUI, JetlinkRegistry, JetlinkServer, JetlinkORT, JetlinkDiorama, JetlinkDioramaUI]
     info:
       path: Resources/Info.plist
       properties:
@@ -68,9 +68,10 @@ targets:
         # A trackpad or mouse on an iPad drives the app as a pointer.
         UIApplicationSupportsIndirectInputEvents: true
         UIRequiredDeviceCapabilities: [arm64, metal]
-        NSLocalNetworkUsageDescription: Jetlink connects to your comma over the USB cable.
-        # The browse that asks for Local Network access at launch.
-        NSBonjourServices: [_jetlink._tcp]
+        NSLocalNetworkUsageDescription: Jetlink connects to your comma over the USB cable, and finds your Mac to show its Diorama.
+        # The browse that asks for Local Network access at launch, and the
+        # Diorama tab's for a Mac nearby (docs/diorama.md).
+        NSBonjourServices: [_jetlink._tcp, _jetlink-diorama._tcp]
         # A model can be copied in from the Finder or the Files app, as well
         # as imported; the app keeps its own copy.
         UIFileSharingEnabled: true

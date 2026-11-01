@@ -47,6 +47,7 @@ final class AppSettings {
     static let keepAwakeWhileServing = "keepAwakeWhileServing"
     static let keepAwakeLidClosed = "keepAwakeLidClosed"
     static let dioramaFolder = "dioramaFolder"
+    static let dioramaShare = "dioramaShare"
   }
 
   @ObservationIgnored private let defaults: UserDefaults
@@ -83,6 +84,12 @@ final class AppSettings {
     didSet { defaults.set(dioramaFolder.path(percentEncoded: false), forKey: Key.dioramaFolder) }
   }
 
+  /// Diorama shown on iPhones nearby, peer to peer: the Mac advertises it
+  /// while this is on, and runs the models while one watches.
+  var dioramaShare: Bool {
+    didSet { defaults.set(dioramaShare, forKey: Key.dioramaShare) }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
@@ -108,6 +115,7 @@ final class AppSettings {
     } else {
       dioramaFolder = AppSettings.applicationSupportDirectory.appending(path: "diorama")
     }
+    dioramaShare = defaults.bool(forKey: Key.dioramaShare)
   }
 
   nonisolated static let defaultTCPPort = 5599

@@ -1,4 +1,6 @@
 import Foundation
+import JetlinkDiorama
+import JetlinkDioramaUI
 import JetlinkKit
 import JetlinkORT
 import JetlinkServer
@@ -39,6 +41,14 @@ final class PhoneServer: ServerControlling {
   /// What the in-process server logs, for a Logs view.
   let logs = LogBuffer()
 
+  /// Diorama's stage on this server's frames, while Settings runs it on the
+  /// phone and its models are here; its feed is the Diorama tab's page.
+  private(set) var dioramaFeed: StageFeed?
+  /// Why there is no stage, for the Diorama tab.
+  private(set) var dioramaProblem: String?
+  /// The models' download, for the Diorama tab.
+  let dioramaDownloads = DioramaDownloads()
+
   init(settings: PhoneSettings, network: NetworkInterfaces) {
     self.settings = settings
     self.network = network
@@ -51,6 +61,8 @@ final class PhoneServer: ServerControlling {
       }
     }
     watchCable()
+    dioramaDownloads.finished = { [weak self] in self?.updateDiorama() }
+    watchDioramaSetting()
   }
 
   nonisolated private static let clock = Date.ISO8601FormatStyle().time(includingFractionalSeconds: true)
@@ -95,6 +107,71 @@ final class PhoneServer: ServerControlling {
     server?.setDial(target)
   }
 
+  // MARK: Diorama
+
+  /// On while Settings runs Diorama on the phone, off at once when it is turned off.
+  private func watchDioramaSetting() {
+    withObservationTracking {
+      _ = settings.dioramaOnPhone
+    } onChange: { [weak self] in
+      Task { @MainActor in
+        self?.updateDiorama()
+        self?.watchDioramaSetting()
+      }
+    }
+  }
+
+  /// A stage on the server's frames when the setting, the server and the
+  /// models are all there; none otherwise.
+  private func updateDiorama() {
+    guard settings.dioramaOnPhone, runState == .serving, let embedded else {
+      detachDiorama()
+      return
+    }
+    guard dioramaFeed == nil else { return }
+    let folder = PhoneSettings.dioramaFolder
+    guard DioramaDownloads.present(in: folder) else {
+      dioramaProblem = nil
+      return
+    }
+    let engines = PhoneSettings.cacheDirectory.appending(path: "diorama", directoryHint: .isDirectory)
+    do {
+      let models = try DioramaStage.Models(folder: folder, coreml: true)
+      var limits = DioramaStage.Limits()
+      // the GPU runs the driving model's second half: half of its time at most
+      limits.duty = 0.5
+      let stage = DioramaStage(
+        models: models, limits: limits,
+        makeEngine: DioramaStage.coreMLFactory(cache: engines) { onnx, name, _ in
+          try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory))
+        })
+      stage.start()
+      embedded.server.host.frameObserver = stage
+      dioramaFeed = StageFeed(stage: stage)
+      dioramaProblem = nil
+    } catch {
+      dioramaProblem = "\(error)"
+    }
+  }
+
+  private func detachDiorama() {
+    guard let feed = dioramaFeed else { return }
+    embedded?.server.host.frameObserver = nil
+    feed.stop()
+    feed.stage.stop()
+    dioramaFeed = nil
+  }
+
+  /// Into the Diorama folder, kept out of iCloud backups.
+  func downloadDiorama() {
+    var folder = PhoneSettings.dioramaFolder
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try? folder.setResourceValues(values)
+    dioramaDownloads.download(into: folder)
+  }
+
   // MARK: lifecycle
 
   func start() {
@@ -123,6 +200,7 @@ final class PhoneServer: ServerControlling {
       runState = .serving
       startRecentTicker()
       updateDial()
+      updateDiorama()
       log.info("serving\(server.port.map { " on port \($0)" } ?? ", not listening")")
     } catch {
       fail("Jetlink could not start its server: \(error)")
@@ -141,6 +219,7 @@ final class PhoneServer: ServerControlling {
   }
 
   private func tearDown(release: Bool) {
+    detachDiorama()
     recentTask?.cancel()
     recentTask = nil
     embedded?.stop(releasingEngine: release)
@@ -171,6 +250,7 @@ final class PhoneServer: ServerControlling {
 
   /// The card on Status says it failed; the reason is in Logs.
   private func fail(_ detail: String) {
+    detachDiorama()
     note(.error, detail)
     lastFailure = detail
     runState = .failed(detail)
