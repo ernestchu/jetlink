@@ -170,41 +170,6 @@ void main() {
     return pts;
   }
 
-  // The asset to draw for a track: its class, and for cars and trucks the height the segmentation measured.
-  function displayType(t) {
-    const h = t.h;
-    if (t.name === 'car') return h != null && h > 1.62 ? 'suv' : 'sedan';
-    if (t.name === 'truck') return h == null || h < 2.3 ? 'pickup' : h < 3.5 ? 'box_truck' : 'semi';
-    return { bus: 'bus', motorcycle: 'motorcycle', bicycle: 'bicycle', person: 'person' }[t.name] || 'sedan';
-  }
-
-  // Push apart vehicles whose footprints overlap (display only); the longer-tracked one moves less.
-  function separate(objs, iters = 4, gap = 0.3) {
-    for (const o of objs) { const c = Math.cos(o.heading), s = Math.sin(o.heading); o.ax = [[c, s], [-s, c]]; o.r = 0.5 * Math.hypot(o.L, o.W); }
-    const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
-    for (let it = 0; it < iters; it++) {
-      let moved = false;
-      for (let i = 0; i < objs.length; i++) for (let j = i + 1; j < objs.length; j++) {
-        const a = objs[i], b = objs[j], d = [b.x - a.x, b.y - a.y];
-        if (Math.abs(d[0]) > a.r + b.r + gap || Math.abs(d[1]) > a.r + b.r + gap || dot(d, d) < 1e-6) continue;
-        let best = null;
-        for (const ax of [...a.ax, ...b.ax]) {
-          const ra = Math.abs(dot(a.ax[0], ax)) * a.L / 2 + Math.abs(dot(a.ax[1], ax)) * a.W / 2;
-          const rb = Math.abs(dot(b.ax[0], ax)) * b.L / 2 + Math.abs(dot(b.ax[1], ax)) * b.W / 2;
-          const pen = ra + rb + gap - Math.abs(dot(d, ax));
-          if (pen <= 0) { best = null; break; }
-          if (!best || pen < best[0]) best = [pen, ax.map((v) => v * Math.sign(dot(d, ax)))];
-        }
-        if (!best) continue;
-        const [pen, ax] = best, fa = b.w / (a.w + b.w);
-        a.x -= ax[0] * pen * fa; a.y -= ax[1] * pen * fa;
-        b.x += ax[0] * pen * (1 - fa); b.y += ax[1] * pen * (1 - fa);
-        moved = true;
-      }
-      if (!moved) break;
-    }
-  }
-
   // ---------------------------------------------------------------- the renderer
   class Renderer {
     constructor(canvas, assets, theme = 'dark') {
@@ -429,18 +394,12 @@ void main() {
       if (lines.length) this.drawDynamic(m, lines, [['pos', 2]]);
     }
 
+    // only the lead, from this frame's prediction, as the one sedan: its rear at the model's distance, facing along its lane
     objects(state) {
-      const objs = [];
-      for (const t of state.tracks) {
-        const kind = displayType(t), a = this.assets[kind];
-        if (!a) continue;
-        const [L, W] = a.dims, heading = t.heading !== null ? t.heading : 0;
-        const bearing = Math.atan2(t.x[1], t.x[0]), rel = heading - bearing;
-        const off = 0.5 * (Math.abs(L * Math.cos(rel)) + Math.abs(W * Math.sin(rel)));  // visible face -> centre
-        objs.push({ type: kind, x: t.x[0] + off * Math.cos(bearing), y: t.x[1] + off * Math.sin(bearing), heading, L, W, lead: t === state.leadTrack, w: t.hits });
-      }
-      separate(objs.filter((o) => o.type !== 'person'));
-      return objs;
+      const l = state.lead, a = this.assets.sedan;
+      if (!l || !a) return [];
+      const [L, W] = a.dims;
+      return [{ type: 'sedan', x: l.x + 0.5 * L * Math.cos(l.heading), y: l.y + 0.5 * L * Math.sin(l.heading), heading: l.heading, L, W, braking: l.braking }];
     }
 
     drawDecals(state, objs, hgt, common) {
@@ -470,7 +429,7 @@ void main() {
         }
       }
       // the planned path, cut before the lead
-      const px = state.px, maxD = state.leadTrack ? Math.max(state.leadTrack.x[0] - 3, 0) : 80;
+      const px = state.px, maxD = state.lead ? Math.max(state.lead.x - 3, 0) : 80;
       const pts = [];
       for (let i = 0; i < IDX_N; i++) {
         if (px[i] >= maxD) {
@@ -530,11 +489,11 @@ void main() {
         gl.bindVertexArray(a.vao);
         gl.drawElements(gl.TRIANGLES, a.count, gl.UNSIGNED_SHORT, 0);
       };
-      for (const o of objs) draw(o.type, o.x, o.y, o.heading, o.lead ? th.path : null, o.lead ? 0.55 : 0, 0.06, o.lead ? state.leadBrake : 0);
+      for (const o of objs) draw(o.type, o.x, o.y, o.heading, th.path, 0.55, 0.06, o.braking ? 1 : 0);
       draw('ego', (EGO_FRONT + EGO_REAR) / 2, 0, 0, null, 0, 0.35, 0);
       gl.bindVertexArray(null);
     }
   }
 
-  root.DioramaRender = { Renderer, THEMES, displayType };
+  root.DioramaRender = { Renderer, THEMES };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -8,9 +8,8 @@ import Synchronization
 ///
 /// Every frame the server answers, the stage takes the driving model's
 /// outputs and, every other frame, the warped narrow image (`FrameObserver`).
-/// On a thread of its own it runs the segmentation (and every fourth frame
-/// DD3D) on that image, and hands the messages of docs/diorama.md to whoever
-/// watches: the web page's event stream, the Mac app's view. The page does
+/// On a thread of its own it runs the segmentation on that image, and hands
+/// the messages of docs/diorama.md to whoever watches: the web page's event stream, the Mac app's view. The page does
 /// the rest in the browser.
 ///
 /// The comma comes first. Nothing runs while nobody watches; the frame hook
@@ -21,8 +20,6 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   public struct Limits: Sendable {
     /// Segment every this many frames (10 Hz).
     public var segEvery: UInt32 = 2
-    /// DD3D on every this many frames; 0 never.
-    public var dd3dEvery: UInt32 = 4
     /// A driving frame this slow pauses the models.
     public var slowFrameUs: UInt32 = 40_000
     public var backOff: TimeInterval = 3
@@ -31,17 +28,17 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     public init() {}
   }
 
-  /// The models `python -m diorama export` wrote, as diorama.json describes them.
+  /// The model `python -m diorama export` wrote, as diorama.json describes it.
   public struct Models: @unchecked Sendable {
     public let folder: URL
     /// diorama.json, as JSONSerialization read it.
     public let meta: [String: Any]
-    /// Each model's ONNX graph, or with `coreml` its CoreML package (a `.mlpackage`).
+    /// The segmentation's ONNX graph, or with `coreml` its CoreML package (a `.mlpackage`).
     public let seg: URL
-    public let dd3d: URL?
 
-    /// `coreml`: the CoreML packages diorama.json names where it names them
-    /// (`export --coreml`), the ONNX graphs otherwise. A Mac asks for them.
+    /// `coreml`: the CoreML package diorama.json names where it names one
+    /// (`export --coreml`), the ONNX graph otherwise. A Mac asks for it.
+    /// Other graphs it names, such as an older export's DD3D, are not run.
     public init(folder: URL, coreml: Bool = false) throws {
       let url = folder.appending(path: "diorama.json")
       guard let data = try? Data(contentsOf: url), let meta = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
@@ -55,10 +52,9 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       self.folder = folder
       self.meta = meta
       self.seg = folder.appending(path: seg)
-      self.dd3d = file("dd3d").map { folder.appending(path: $0) }
       // a missing graph is found here, not minutes later behind the backend's error
-      for graph in [self.seg, self.dd3d].compactMap({ $0 }) where !FileManager.default.fileExists(atPath: graph.path) {
-        throw DioramaError("\(url.path) names \(graph.lastPathComponent), which is not in \(folder.path)")
+      if !FileManager.default.fileExists(atPath: self.seg.path) {
+        throw DioramaError("\(url.path) names \(self.seg.lastPathComponent), which is not in \(folder.path)")
       }
     }
   }
@@ -73,7 +69,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     fileprivate var queue: [Data] = []
     fileprivate var dropped = false
     fileprivate var closed = false
-    /// It also wants the frames the models see (`input` messages): the web page's Model input view.
+    /// It also wants the frames the models see (`input` messages): a page's Model input view.
     fileprivate var input = false
   }
 
@@ -106,7 +102,6 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   // takes minutes, and the drive messages keep flowing meanwhile.
   private let engineLock = NSLock()
   private var seg: (any Engine)?
-  private var dd3d: (any Engine)?
   private var preparing = false
   private var loadFailed = false
   private let half: [UInt16] = (0..<256).map { DioramaStage.float16Bits(Float($0)) }
@@ -222,7 +217,6 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   // MARK: the stage's thread
 
   private func loop() {
-    var lastDD3D: UInt32?
     while true {
       _ = wake.wait(timeout: .now() + 1)
       watchLock.lock()
@@ -252,23 +246,19 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       if let seen { showSeen(seen, frameID) }
       // a pause does not stop a build, and must not hide why the models never run
       if paused && !preparingOrFailed { setStatus("paused: the driving model ran slow") }
-      guard let frame, let nets = engines() else { continue }
+      guard let frame, let seg = engine() else { continue }
       setStatus("running")
-      if let message = run(nets.seg, frame, { segMessage($0, frameID, $1) }) {
+      if let message = run(seg, frame, { segMessage($0, frameID, $1) }) {
         broadcast(message)
-      }
-      if let dd3d = nets.dd3d, limits.dd3dEvery > 0, frameID % limits.dd3dEvery == 0 || lastDD3D.map({ frameID &- $0 >= limits.dd3dEvery }) ?? true {
-        lastDD3D = frameID
-        if let message = run(dd3d, frame, { boxesMessage($0, frameID, $1) }) { broadcast(message) }
       }
     }
   }
 
-  /// The models once they are ready; until then nil, and the first call starts preparing them.
-  private func engines() -> (seg: any Engine, dd3d: (any Engine)?)? {
+  /// The segmentation once it is ready; until then nil, and the first call starts preparing it.
+  private func engine() -> (any Engine)? {
     engineLock.lock()
     defer { engineLock.unlock() }
-    if let seg { return (seg, dd3d) }
+    if let seg { return seg }
     if !preparing && !loadFailed {
       preparing = true
       let thread = Thread { [weak self] in self?.prepare() }
@@ -287,17 +277,11 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     do {
       setStatus("preparing the segmentation model; the first time takes minutes")
       let seg = try makeEngine(models.seg, "seg", progress("segmentation"))
-      var dd3d: (any Engine)?
-      if let url = models.dd3d {
-        setStatus("preparing DD3D")
-        dd3d = try makeEngine(url, "dd3d", progress("dd3d"))
-      }
       engineLock.lock()
       self.seg = seg
-      self.dd3d = dd3d
       preparing = false
       engineLock.unlock()
-      log.info("models ready")
+      log.info("segmentation ready")
     } catch {
       engineLock.lock()
       loadFailed = true
@@ -353,10 +337,6 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     return DioramaPackets.seg(frame: frame, ms: ms, qmap: qmap, width: shape[shape.count - 1], height: shape[shape.count - 2], label: label, score: score)
   }
 
-  private func boxesMessage(_ engine: any Engine, _ frame: UInt32, _ ms: Float) -> Data? {
-    floats(engine, "boxes").map { DioramaPackets.boxes(frame: frame, ms: ms, rows: $0) }
-  }
-
   /// The model input to the watchers that want it. A watcher this far
   /// behind skips the frame rather than queueing more of them.
   private func showSeen(_ packed: [UInt8], _ frame: UInt32) {
@@ -406,7 +386,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     let drive = fields.map { [$0.name, $0.count] as [Any] }
     frameLock.unlock()
     var info: [String: Any] = ["version": 1, "fps": 20, "live": true, "height": 1.22, "drive": drive]
-    for key in ["frame", "seg", "dd3d"] { if let v = models.meta[key] { info[key] = v } }
+    for key in ["frame", "seg"] { if let v = models.meta[key] { info[key] = v } }
     return info
   }
 

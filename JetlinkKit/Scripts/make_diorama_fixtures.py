@@ -28,18 +28,15 @@ def inputs():
   qmap[2, :] = 3  # a run longer than 256
   label = np.array([12, 40, 7, 3, 0], np.float32)
   score = np.array([0.0, 0.5, 0.9, 1.0, 0.25], np.float32)
-  rows = np.arange(3 * 16, dtype=np.float32).reshape(3, 16) / 10
-  rows[:, 6] = [0.05, 0.5, 0.1]
-  return values, qmap, label, score, rows
+  return values, qmap, label, score
 
 
 def main():
-  values, qmap, label, score, rows = inputs()
+  values, qmap, label, score = inputs()
   out = ROOT / 'JetlinkKit/Tests/JetlinkDioramaTests/Fixtures/packets.bin'
   with open(out, 'wb') as fh:
     packets.write(fh, packets.drive(7, 0.35, 3.5, values))
     packets.write(fh, packets.seg(8, 21.5, qmap, label, score))
-    packets.write(fh, packets.boxes(8, 12.25, rows))
   print(f'wrote {out}')
 
 

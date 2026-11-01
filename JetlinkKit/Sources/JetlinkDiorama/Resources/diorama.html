@@ -66,8 +66,8 @@
     background: #000; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35); pointer-events: none; }
   .inputview[hidden] { display: none; }
   .inputview canvas { width: 100%; height: auto; aspect-ratio: 2 / 1; display: block; image-rendering: pixelated; }
-  .inputview span { position: absolute; left: 8px; top: 6px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000;
-    font-variant-numeric: tabular-nums; }
+  .inputview span { display: block; padding: 3px 8px; font-size: 11px; color: #ddd; background: #000;
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .transport { display: flex; align-items: center; gap: 10px; flex: 1 1 320px; min-width: 0; }
   .transport input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
   button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
@@ -103,8 +103,6 @@
   <div class="stat"><b id="modelHz">–</b><span>Frames</span></div>
   <div class="stat"><b id="segMs">–</b><span>Segmentation</span></div>
   <div class="stat"><b id="segHz">–</b><span>Perception</span></div>
-  <div class="stat"><b id="dd3dMs">–</b><span>Headings (DD3D)</span></div>
-  <div class="stat"><b id="tracks">–</b><span>Tracked</span></div>
   <div class="stat note" id="modelsNote" hidden><b id="modelsState"></b><span>Models</span></div>
   <label class="debug" id="inputToggle" hidden title="The frame the models see: the narrow camera, warped to 512×256"><input type="checkbox" id="showInput"> Model input</label>
   <div class="transport" id="transport" hidden>
@@ -143,19 +141,17 @@
   }
 
   function stats() {
-    const t = engine.timing, m = median(t.model), sg = median(t.seg), dd = median(t.dd3d);
+    const t = engine.timing, m = median(t.model), sg = median(t.seg);
     const ms = (v) => (v == null ? '–' : `${v.toFixed(1)} ms`);
     $('modelMs').textContent = ms(m);
     $('modelMs').classList.toggle('over', m != null && m > 50);
     $('segMs').textContent = ms(sg);
-    $('dd3dMs').textContent = ms(dd);
     // frames a second as they arrive (live), or the drive's own rate
     const now = performance.now();
     frameTimes = frameTimes.filter((x) => now - x < 2000);
     $('modelHz').textContent = live ? `${(frameTimes.length / 2).toFixed(0)} Hz` : '20 Hz';
     const sf = t.segFrames;
     $('segHz').textContent = sf.length > 1 ? `${(E.FPS * (sf.length - 1) / Math.max(sf[sf.length - 1] - sf[0], 1)).toFixed(1)} Hz` : '–';
-    $('tracks').textContent = engine.state ? engine.state.tracks.length : '–';
   }
 
   function frame() {
@@ -176,15 +172,19 @@
     if (msg.kind === 'D') { lastData = performance.now(); frameTimes.push(lastData); }
     if (msg.kind === 'M' && msg.meta.source) $('src').textContent = msg.meta.source.route ? `${msg.meta.source.route}` : '';
     if (msg.kind === 'T') models(msg.text);
-    if (msg.kind === 'I' && $('showInput').checked) drawInput(msg);
+    if ($('showInput').checked && (msg.kind === 'I' || msg.kind === 'S')) inputMessage(msg);
   }
 
-  // ---- debug: the frame the models see, the packed narrow frame unpacked to 512x256 RGB (BT.601, video range)
-  let inputImage = null;
-  function drawInput(msg) {
-    const { w, h, packed } = msg, W = 2 * w, H = 2 * h, plane = w * h, ctx = $('inputCanvas').getContext('2d');
-    if (!inputImage || inputImage.width !== W) inputImage = ctx.createImageData(W, H);
-    const px = inputImage.data;
+  // ---- debug: the frame the models see, the packed narrow frame unpacked to 512x256 RGB (BT.601, video range),
+  // with what the segmentation made of it tinted over it, each thing outlined and named
+  const SEG_TINT = { 1: [128, 64, 255], 2: [255, 214, 10], 3: [255, 255, 255], 4: [255, 140, 0], 5: [255, 92, 170] };
+  const THING_TINT = { car: [56, 132, 255], truck: [0, 200, 220], bus: [0, 200, 220], person: [255, 64, 64], bicycle: [70, 210, 110], motorcycle: [70, 210, 110] };
+  const images = [];  // the last few frames as RGB, for the segmentation that comes after its frame
+  let lastSeg = null, shown = -1;
+
+  function unpack(msg) {
+    const { w, h, packed } = msg, W = 2 * w, H = 2 * h, plane = w * h;
+    const image = new ImageData(W, H), px = image.data;
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         // the four Y planes are Y[0::2, 0::2], Y[1::2, 0::2], Y[0::2, 1::2], Y[1::2, 1::2]
@@ -193,11 +193,71 @@
         px[o] = c + 1.596 * v; px[o + 1] = c - 0.391 * u - 0.813 * v; px[o + 2] = c + 2.018 * u; px[o + 3] = 255;
       }
     }
-    ctx.putImageData(inputImage, 0, 0);
-    $('inputLabel').textContent = `model input · ${W}×${H} · frame ${msg.frame}`;
+    return image;
   }
 
-  // the toggle, on the web page only: remembered here, and the source asks the server for the frames only while it is on
+  function inputMessage(msg) {
+    if (msg.kind === 'I') {
+      images.push({ frame: msg.frame, image: unpack(msg) });
+      if (images.length > 6) images.shift();
+    } else lastSeg = msg;
+    if (!images.length) return;
+    // the frame the newest segmentation is of, which comes a little after the frame itself; the newest frame
+    // bare while the models are not segmenting (preparing, paused, off)
+    const segImage = lastSeg && images.find((i) => i.frame === lastSeg.frame), newest = images[images.length - 1];
+    if (segImage) {
+      if (segImage.frame !== shown) drawInput(segImage, lastSeg);
+    } else if (!lastSeg || newest.frame - lastSeg.frame >= 8) drawInput(newest, null);
+  }
+
+  function drawInput({ frame, image }, seg) {
+    const ctx = $('inputCanvas').getContext('2d'), W = image.width, H = image.height, meta = engine.meta;
+    shown = frame;
+    ctx.putImageData(image, 0, 0);
+    const notes = [`frame ${frame}`];
+    if (seg && meta && meta.seg) {
+      const info = E.readSeg(seg, meta), { w, h, qmap, qThing, cls } = info, sx = W / w, sy = H / h;
+      const tint = new ImageData(w, h), px = tint.data;
+      for (let i = 0; i < w * h; i++) {
+        const q = qmap[i];
+        const c = q === 255 ? null : qThing[q] ? THING_TINT[qThing[q]] || THING_TINT.car : SEG_TINT[cls[i]];
+        if (!c) continue;
+        // a thing's edge (another query beside it) opaque, its inside and the road classes see-through
+        const x = i % w, edge = qThing[q] && ((x > 0 && qmap[i - 1] !== q) || (x < w - 1 && qmap[i + 1] !== q) || (i >= w && qmap[i - w] !== q) || (i < w * (h - 1) && qmap[i + w] !== q));
+        px.set(c, 4 * i); px[4 * i + 3] = edge ? 255 : qThing[q] ? 110 : 90;
+      }
+      const off = new OffscreenCanvas(w, h);
+      off.getContext('2d').putImageData(tint, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(off, 0, 0, W, H);
+      // each thing's name and score, above it
+      const tops = new Map(), area = new Uint32Array(256);
+      for (let i = 0; i < w * h; i++) {
+        const q = qmap[i];
+        if (q === 255 || !qThing[q]) continue;
+        area[q]++;
+        if (!tops.has(q)) tops.set(q, i);
+      }
+      ctx.font = '600 10px system-ui, sans-serif';
+      for (const [q, i] of tops) {
+        if (area[q] < 6) continue;
+        label(ctx, `${qThing[q]} ${(seg.score[q] / 255).toFixed(2)}`, (i % w) * sx, Math.floor(i / w) * sy, THING_TINT[qThing[q]] || THING_TINT.car, 'above');
+      }
+      notes.push(`seg ${seg.ms.toFixed(0)} ms`);
+    }
+    $('inputLabel').textContent = `model input · ${W}×${H} · ${notes.join(' · ')}`;
+  }
+
+  function label(ctx, text, x, y, rgb, where) {
+    const tw = ctx.measureText(text).width + 6, top = where === 'above' ? Math.max(y - 13, 0) : Math.min(y, 256 - 13);
+    const left = Math.min(Math.max(x, 0), 512 - tw);
+    ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.85)`;
+    ctx.fillRect(left, top, tw, 13);
+    ctx.fillStyle = '#000';
+    ctx.fillText(text, left + 3, top + 10);
+  }
+
+  // the toggle: remembered here, and the source asks the server for the frames only while it is on
   function inputToggle(ask) {
     let on = false;
     try { on = localStorage.getItem('diorama.input') === '1'; } catch (e) { /* storage off */ }
@@ -265,7 +325,7 @@
     $('seek').max = duration;
     const now = () => (video ? video.currentTime : clock);
     const replay = (target) => {
-      // back to a frame: start over a little before it, so the tracker and the road map have history
+      // back to a frame: start over a little before it, so the road map has history
       const from = Math.max(0, target - 200);
       engine.reset();
       at = frames[from] !== undefined ? frames[from] : 0;
@@ -302,7 +362,8 @@
   function bridgeSource() {
     window.Diorama = { push: (s) => take(b64(s)), pushAll: (list) => list.forEach((s) => take(b64(s))), reset: () => engine.reset() };
     wait('Waiting for the comma…');
-    try { window.webkit.messageHandlers.diorama.postMessage('ready'); } catch (e) { /* not in the app */ }
+    const post = (m) => { try { window.webkit.messageHandlers.diorama.postMessage(m); } catch (e) { /* not in the app */ } };
+    post(inputToggle((on) => post(on ? 'input:on' : 'input:off')) ? 'input:on' : 'ready');
     return { tick() { wait(performance.now() - lastData < 2000 ? '' : 'Waiting for the comma…'); } };
   }
 

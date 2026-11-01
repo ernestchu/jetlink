@@ -5,9 +5,10 @@
 //
 // Diorama's engine: the server's messages (docs/diorama.md) in, the scene out.
 // The driving model's outputs give the path, lanes, road edges, lead and ego
-// motion; the segmentation gives the road surface and the things on it, ranged
-// where they touch the road; DD3D gives each car's heading. A tracker holds the
-// things between looks, and a road map holds the surface around the car.
+// motion; the segmentation gives the road surface, which a road map holds
+// around the car. The lead is drawn from each frame's own prediction, facing
+// along its lane, when the newest segmentation has a vehicle where it is: no
+// tracking between frames.
 //
 // Road frame throughout: x forward, y right, z down, origin at the camera, the
 // road at z = height. No browser APIs here: diorama-render.js draws the scene,
@@ -21,18 +22,12 @@
   const PLAN_WIDTH = 15;
   const LEAD_MHP_N = 2, LEAD_SEL = 3, LEAD_LEN = 6, LEAD_WIDTH = 4;
   const EGO_FRONT = 1.6, EGO_REAR = -3.1;  // the ego car's bumpers, from the camera
-  const VEHICLES = new Set(['car', 'truck', 'bus', 'motorcycle', 'bicycle']);
-  const H_PRIOR = { car: 1.5, truck: 2.6, bus: 3.1, motorcycle: 1.3, bicycle: 1.3, person: 1.7 };
-  const CORRIDOR = 8.0;  // m either side of the planned path or of straight ahead
-  const X_RANGE = [1.0, 80.0];
-  const MIN_AREA = 6;  // query-map pixels for a thing to count
   const OCCLUDER = 255;
-  const DD3D_FOR = { car: [0, 3, 4], truck: [0, 3, 4], bus: [3, 4], motorcycle: [2], bicycle: [2] };  // Car Ped Cyc Van Truck
+  const SEG_FRESH = 10;  // frames: a segmentation older than this (0.5 s) confirms no lead
 
   // ---------------------------------------------------------------- small math
   const clamp = (x, a, b) => Math.min(Math.max(x, a), b);
   const smoothstep = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
-  const wrap = (a) => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
   const sexp = (x) => Math.exp(Math.min(x, 11));
   const sigmoid = (x) => 1 / (1 + sexp(-x));
 
@@ -101,12 +96,6 @@
         p += len;
       }
       return { kind, frame, ms, w, h, label, score, qmap };
-    }
-    if (kind === 'B') {
-      const frame = dv.getUint32(1, true), ms = dv.getFloat32(5, true), n = dv.getUint16(9, true);
-      const rows = new Float32Array(n * 16);
-      for (let i = 0; i < n * 16; i++) rows[i] = dv.getFloat32(11 + 4 * i, true);
-      return { kind, frame, ms, n, rows };
     }
     return { kind };
   }
@@ -179,8 +168,7 @@
   class OutputSmoother {
     constructor(k) {
       this.f = {};
-      for (const n of ['plan', 'lane_lines', 'road_edges', 'lane_prob', 'edge_std', 'lead', 'lead_prob']) this.f[n] = new KF(k);
-      this.leadPresent = false;
+      for (const n of ['plan', 'lane_lines', 'road_edges', 'lane_prob', 'edge_std']) this.f[n] = new KF(k);
     }
     smooth(o) {
       const s = Object.assign({}, o);
@@ -190,11 +178,6 @@
       s.road_edges = Float64Array.from(this.f.road_edges.update(o.road_edges, o.road_edges_stds));
       s.lane_lines_prob = Float64Array.from(this.f.lane_prob.update(o.lane_lines_prob, tenth(o.lane_lines_prob)));
       s.road_edges_stds = Float64Array.from(this.f.edge_std.update(o.road_edges_stds, tenth(o.road_edges_stds)));
-      s.lead_prob = Float64Array.from(this.f.lead_prob.update(o.lead_prob, tenth(o.lead_prob)));
-      const present = s.lead_prob[0] > 0.5;
-      if (present && !this.leadPresent) this.f.lead.reset();
-      this.leadPresent = present;
-      s.lead = Float64Array.from(this.f.lead.update(o.lead, o.lead_stds));
       return s;
     }
   }
@@ -263,238 +246,39 @@
     return { w: msg.w, h: msg.h, ds: seg.ds, cls, qmap: msg.qmap, qThing };
   }
 
-  // Things in or beside the corridor: (name, xy of the visible face, sigma, height, 2D box). Ranged at their ground
-  // contact on the predicted road surface; with the contact hidden, at the top edge with a class height prior.
-  function corridorObjects(cam, seg, zpath, pathY) {
+  // Does the segmentation have a vehicle where the model puts the lead? The rear of the lead, (x, y) on the road at
+  // road height `road` (z down), seen from 0.2 to 1.4 m above it, within 2 query-map pixels either side; and that
+  // vehicle stands on the road at about the lead's distance (within 25%, or 3 m), so a car further on, seen past
+  // empty road at the lead's distance, does not count. One whose bottom is cut off by the frame's edge counts.
+  function segSeesVehicle(cam, seg, x, y, road) {
     const { w, h, ds, qmap, qThing } = seg;
-    const us = new Map(), vs = new Map();
-    for (let v = 0; v < h; v++) for (let u = 0; u < w; u++) {
-      const q = qmap[v * w + u];
-      if (q === 255 || !qThing[q]) continue;
-      if (!us.has(q)) { us.set(q, []); vs.set(q, []); }
-      us.get(q).push(u); vs.get(q).push(v);
-    }
-    const out = [];
-    const hoodRow = h;  // the model frame shows no hood
-    for (const [q, u] of us) {
-      if (u.length < MIN_AREA) continue;
-      const v = vs.get(q), name = qThing[q];
-      const uLo = percentile(u, 20), uHi = percentile(u, 80);
-      const midV = [], midU = [];
-      for (let i = 0; i < u.length; i++) if (u[i] >= uLo && u[i] <= uHi) { midV.push(v[i]); midU.push(u[i]); }
-      const vBot = percentile(midV, 97) + 0.5, vTop = percentile(v, 2), uc = percentile(midU, 50);
-      // is the ground contact visible? (not at the bottom edge, nothing else directly below it)
-      const r0 = Math.floor(vBot) + 1, r1 = Math.min(Math.floor(vBot) + 4, h);
-      let below = 0, other = 0;
-      for (let r = r0; r < r1; r++) for (let c = Math.floor(uLo); c <= Math.floor(uHi); c++) {
-        below++;
-        const b = qmap[r * w + c];
-        if (b !== 255 && b !== q && qThing[b]) other++;
+    const hits = new Set();
+    for (let up = 0.2; up <= 1.41; up += 0.2) {
+      const [u, v, depth] = cam.project(x, y, road - up);
+      if (depth <= 0) continue;
+      const cu = Math.round(u / ds), cv = Math.floor(v / ds);
+      if (cv < 0 || cv >= h) continue;
+      for (let c = Math.max(cu - 2, 0); c <= Math.min(cu + 2, w - 1); c++) {
+        const q = qmap[cv * w + c];
+        if (q !== 255 && qThing[q] && qThing[q] !== 'person') hits.add(q);
       }
-      const contact = vBot < hoodRow - 2 && (below === 0 || other / below < 0.25);
-      let pts = null, sigma = 0, hgt = null;
-      if (contact) {
-        let G = cam.groundHit(uc * ds, vBot * ds, cam.height);
-        if (G) G = cam.groundHit(uc * ds, vBot * ds, cam.height + zpath(G[0]));
-        if (G) {
-          pts = G;
-          const r = Math.hypot(G[0], G[1]);
-          sigma = 2 * r * r / (cam.height * cam.f) + 0.3;
-          hgt = vTop > 1 ? (vBot - vTop) * ds * G[0] / cam.f : null;
-        }
-      }
-      if (!pts) {
-        if (vTop <= 1) continue;
-        let G = cam.groundHit(uc * ds, vTop * ds, cam.height - H_PRIOR[name]);
-        if (G) G = cam.groundHit(uc * ds, vTop * ds, cam.height + zpath(G[0]) - H_PRIOR[name]);
-        if (!G) continue;
-        pts = G;
-        sigma = 0.15 * Math.hypot(G[0], G[1]) + 0.5;
-      }
-      const x = pts[0], y = pts[1];
-      // straight ahead counts too: when the plan turns, what is in front of the car still matters (the lead)
-      if (!(x > X_RANGE[0] && x < X_RANGE[1]) || Math.min(Math.abs(y - pathY(x)), Math.abs(y)) > CORRIDOR) continue;
-      let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-      for (let i = 0; i < u.length; i++) { u0 = Math.min(u0, u[i]); u1 = Math.max(u1, u[i]); v0 = Math.min(v0, v[i]); v1 = Math.max(v1, v[i]); }
-      out.push({ name, xy: [x, y], sigma, h: hgt, box: [u0 * ds, v0 * ds, (u1 + 1) * ds, (v1 + 1) * ds] });
     }
-    return out;
-  }
-
-  // ---------------------------------------------------------------- DD3D
-  // Rows (export.DD3D_COLUMNS) -> 2D NMS per class as DD3D's own decode does -> road-frame centre, yaw, range.
-  function readBoxes(msg) {
-    const n = msg.n, r = msg.rows, rows = [];
-    for (let i = 0; i < n; i++) rows.push(r.subarray(16 * i, 16 * i + 16));
-    rows.sort((a, b) => b[6] - a[6]);
-    const keep = [];
-    const iou = (a, b) => {
-      const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
-      const inter = ix * iy;
-      return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter);
-    };
-    for (const row of rows) if (!keep.some((k) => k[4] === row[4] && iou(k, row) > 0.75)) keep.push(row);
-    return keep.filter((row) => row[5] > 0.2).map((row) => {
-      // camera (x right, y down, z forward) -> road (x forward, y right, z down)
-      const cx = row[9], cy = row[7], fx = row[12], fy = row[10];
-      return { box: [row[0], row[1], row[2], row[3]], cls: row[4], score3d: row[6], xy: [cx, cy], yaw: Math.atan2(fy, fx), range: Math.hypot(cx, cy) };
-    });
-  }
-
-  function matchDD3D(boxes, box, name, minIoU = 0.5, minScore = 0.15) {
-    const ok = DD3D_FOR[name] || [];
-    let best = null, bestIoU = minIoU;
-    for (const b of boxes) {
-      if (!ok.includes(b.cls) || b.score3d <= minScore) continue;
-      const ix = Math.max(0, Math.min(b.box[2], box[2]) - Math.max(b.box[0], box[0])), iy = Math.max(0, Math.min(b.box[3], box[3]) - Math.max(b.box[1], box[1]));
-      const inter = ix * iy;
-      const iou = inter / ((b.box[2] - b.box[0]) * (b.box[3] - b.box[1]) + (box[2] - box[0]) * (box[3] - box[1]) - inter);
-      if (iou >= bestIoU) { bestIoU = iou; best = b; }
+    if (!hits.size) return false;
+    // each hit vehicle's lowest row, and the middle of that row
+    const bottom = new Map();
+    for (let i = w * h - 1; i >= 0; i--) {
+      const q = qmap[i];
+      if (!hits.has(q)) continue;
+      const r = Math.floor(i / w), b = bottom.get(q);
+      if (!b) bottom.set(q, { r, c0: i % w, c1: i % w });
+      else if (b.r === r) b.c0 = i % w;
     }
-    return best;
-  }
-
-  // ---------------------------------------------------------------- tracker
-  const groupOf = (name) => (VEHICLES.has(name) ? 'vehicle' : 'person');
-  let nextTrackId = 0;
-
-  // Constant velocity in the ground plane (x, y, vx, vy), velocities in the world, coordinates in the ego frame.
-  class Track {
-    constructor(name, xy, sigma, v0 = [0, 0], vStd = 2.0) {
-      this.id = nextTrackId++;
-      this.name = name;
-      this.x = [xy[0], xy[1], v0[0], v0[1]];
-      this.P = [[sigma * sigma, 0, 0, 0], [0, sigma * sigma, 0, 0], [0, 0, vStd * vStd, 0], [0, 0, 0, vStd * vStd]];
-      this.hits = 1; this.misses = 0; this.age = 0;
-      this.heading = null; this.h = null;
-      this.static = false;
-      this.axis = [0, 0];  // sum of w exp(2i yaw): the yaw axis evidence (mod pi)
-      this.dvec = [0, 0];  // which way along the axis the vehicle faces
+    for (const { r, c0, c1 } of bottom.values()) {
+      if (r >= h - 1) return true;
+      const G = cam.groundHit(((c0 + c1) / 2 + 0.5) * ds, (r + 1) * ds, road);
+      if (G && Math.abs(G[0] - x) <= Math.max(3, 0.25 * x)) return true;
     }
-    predict(egoT, egoYaw, q) {
-      if (this.static) { this.x[2] = this.x[3] = 0; q = 0.05; }
-      const c = Math.cos(-egoYaw), s = Math.sin(-egoYaw);
-      const px = this.x[0] - egoT[0], py = this.x[1] - egoT[1];
-      this.x = [c * px - s * py, s * px + c * py, c * this.x[2] - s * this.x[3], s * this.x[2] + c * this.x[3]];
-      if (this.heading !== null) this.heading -= egoYaw;
-      const ca = Math.cos(-2 * egoYaw), sa = Math.sin(-2 * egoYaw);
-      this.axis = [0.97 * (ca * this.axis[0] - sa * this.axis[1]), 0.97 * (sa * this.axis[0] + ca * this.axis[1])];
-      this.dvec = [0.97 * (c * this.dvec[0] - s * this.dvec[1]), 0.97 * (s * this.dvec[0] + c * this.dvec[1])];
-      this.x[0] += DT * this.x[2]; this.x[1] += DT * this.x[3];
-      // P = F P F^T + G G^T q^2, F: position += DT velocity
-      const F = [[1, 0, DT, 0], [0, 1, 0, DT], [0, 0, 1, 0], [0, 0, 0, 1]];
-      const mul = (A, B, tb) => A.map((row, i) => [0, 1, 2, 3].map((j) => row.reduce((s, a, l) => s + a * (tb ? B[j][l] : B[l][j]), 0)));
-      const N = mul(mul(F, this.P), F, true);
-      const g = [DT * DT / 2, DT * DT / 2, DT, DT];
-      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) if ((i & 1) === (j & 1)) N[i][j] += g[i] * g[j] * q * q;
-      this.P = N;
-      this.age++;
-    }
-    update(xy, sigma) {
-      const P = this.P, r = sigma * sigma;
-      const S = [[P[0][0] + r, P[0][1]], [P[1][0], P[1][1] + r]];
-      const det = S[0][0] * S[1][1] - S[0][1] * S[1][0];
-      const Si = [[S[1][1] / det, -S[0][1] / det], [-S[1][0] / det, S[0][0] / det]];
-      const K = [0, 1, 2, 3].map((i) => [P[i][0] * Si[0][0] + P[i][1] * Si[1][0], P[i][0] * Si[0][1] + P[i][1] * Si[1][1]]);
-      const e = [xy[0] - this.x[0], xy[1] - this.x[1]];
-      for (let i = 0; i < 4; i++) this.x[i] += K[i][0] * e[0] + K[i][1] * e[1];
-      this.P = [0, 1, 2, 3].map((i) => [0, 1, 2, 3].map((j) => P[i][j] - K[i][0] * P[0][j] - K[i][1] * P[1][j]));
-      this.hits++; this.misses = 0;
-    }
-    absorb(extra) {
-      if (!extra) return;
-      if (extra.h != null) this.h = this.h == null ? extra.h : 0.85 * this.h + 0.15 * extra.h;
-      if (extra.pose) { this.axis[0] += extra.pose.w * Math.cos(2 * extra.pose.yaw); this.axis[1] += extra.pose.w * Math.sin(2 * extra.pose.yaw); }
-      if (extra.dir) { this.dvec[0] += extra.dir[0]; this.dvec[1] += extra.dir[1]; }
-    }
-  }
-
-  class Tracker {
-    constructor() { this.tracks = []; }
-    step(meas, egoT, egoYaw, visible) {
-      for (const t of this.tracks) { t.predict(egoT, egoYaw, VEHICLES.has(t.name) ? 2.5 : 1.0); t.misses++; }
-      const pairs = [];
-      meas.forEach((m, mi) => {
-        const gate = Math.max(2.5, 2.5 * m.sigma);
-        this.tracks.forEach((t, ti) => {
-          if (groupOf(t.name) !== m.group) return;
-          const d = Math.hypot(m.xy[0] - t.x[0], m.xy[1] - t.x[1]);
-          if (d < gate) pairs.push([d / gate, mi, ti]);
-        });
-      });
-      pairs.sort((a, b) => a[0] - b[0]);
-      const usedM = new Set(), usedT = new Set();
-      for (const [, mi, ti] of pairs) {
-        if (usedM.has(mi) || usedT.has(ti)) continue;
-        usedM.add(mi); usedT.add(ti);
-        const t = this.tracks[ti], m = meas[mi];
-        t.update(m.xy, m.sigma);
-        t.absorb(m.extra);
-        if (t.name !== m.name && t.hits < 5) t.name = m.name;
-      }
-      const egoV = [egoT[0] / DT, egoT[1] / DT];
-      meas.forEach((m, mi) => {
-        if (usedM.has(mi)) return;
-        if (this.tracks.some((t) => Math.abs(t.x[0] - m.xy[0]) < 2 && Math.hypot(t.x[0] - m.xy[0], t.x[1] - m.xy[1]) < 2 && groupOf(t.name) === m.group)) return;
-        // vehicles start out moving with the ego car (true for most of them at speed; parked ones settle fast under
-        // the wide prior). A standing start makes highway traffic rush at the ego car, fall out of the gate and
-        // leave a ghost behind while the real car gets a new track
-        const t = m.group === 'vehicle' ? new Track(m.name, m.xy, m.sigma, egoV, 2 + 0.5 * Math.hypot(egoV[0], egoV[1])) : new Track(m.name, m.xy, m.sigma);
-        t.absorb(m.extra);
-        this.tracks.push(t);
-      });
-      const keep = [];
-      for (const t of this.tracks) {
-        if (t.hits >= 3 && !visible(t.x[0], t.x[1])) {
-          // out of view: almost always the ego car just drives past it, so hold it still in the world
-          t.static = true;
-          t.x[2] = t.x[3] = 0;
-          t.P[2][2] = t.P[3][3] = 0.01; t.P[2][3] = t.P[3][2] = 0;
-          if (t.x[0] > -30 && t.x[0] < 150 && Math.abs(t.x[1]) < 40) keep.push(t);
-          continue;
-        }
-        t.static = false;
-        if (t.misses <= 8 && t.x[0] > -30 && t.x[0] < 150) keep.push(t);
-      }
-      this.tracks = keep;
-    }
-    mergeDuplicates() {
-      const drop = new Set(), ts = [...this.tracks].sort((a, b) => b.hits - a.hits);
-      for (let i = 0; i < ts.length; i++) for (let j = i + 1; j < ts.length; j++) {
-        const a = ts[i], b = ts[j];
-        if (drop.has(a.id) || drop.has(b.id) || groupOf(a.name) !== groupOf(b.name)) continue;
-        if (Math.hypot(a.x[0] - b.x[0], a.x[1] - b.x[1]) < (groupOf(a.name) === 'vehicle' ? 2.5 : 0.8)) drop.add(b.id);
-      }
-      this.tracks = this.tracks.filter((t) => !drop.has(t.id));
-    }
-    confirmed() { return this.tracks.filter((t) => t.hits >= 3); }
-  }
-
-  // Heading from DD3D's yaw axes, motion and the lane direction (fsd_ui.fuse_heading).
-  function fuseHeading(t, sp, vStd, laneHeading) {
-    const moving = t.hits > 10 && sp > 3.5 && vStd < 1.5;
-    const velDir = Math.atan2(t.x[3], t.x[2]);
-    t.axis[0] += 0.06 * Math.cos(2 * laneHeading); t.axis[1] += 0.06 * Math.sin(2 * laneHeading);
-    if (moving) {
-      t.axis[0] += 0.6 * Math.cos(2 * velDir); t.axis[1] += 0.6 * Math.sin(2 * velDir);
-      t.dvec[0] += 0.5 * Math.cos(velDir); t.dvec[1] += 0.5 * Math.sin(velDir);
-    }
-    let a = 0.5 * Math.atan2(t.axis[1], t.axis[0]);
-    if (!moving) {
-      // parked cars line up with the road: an axis close to the lane is snapped to it (soft between 12 and 25 degrees)
-      const da = ((a - laneHeading + Math.PI / 2) % Math.PI + Math.PI) % Math.PI - Math.PI / 2;
-      a = laneHeading + da * smoothstep(12 * Math.PI / 180, 25 * Math.PI / 180, Math.abs(da));
-    }
-    const ev = t.dvec[0] * Math.cos(a) + t.dvec[1] * Math.sin(a);
-    let nw;
-    if (Math.abs(ev) > 0.4) nw = ev > 0 ? a : a + Math.PI;
-    else {
-      const prev = t.heading !== null ? t.heading : laneHeading;
-      nw = Math.cos(prev - a) >= 0 ? a : a + Math.PI;
-    }
-    if (t.heading === null) return nw;
-    const d = wrap(nw - t.heading);
-    return Math.abs(d) > 2.5 ? nw : t.heading + 0.2 * d;  // a flip snaps rather than spinning through 90 degrees
+    return false;
   }
 
   // ---------------------------------------------------------------- road map
@@ -814,14 +598,12 @@
       this.cam = this.meta ? new FrameCamera(this.meta) : null;
       this.smoother = new OutputSmoother(0.3);
       this.trail = new EgoTrail();
-      this.tracker = new Tracker();
       this.roadmap = this.cam ? new RoadMap(this.cam) : null;
-      this.leads = new Map();  // frame -> the raw model's lead (x, y, std) when it saw one, for fusing late perception
-      this.pendingSeg = []; this.pendingBoxes = new Map();
+      this.pendingSeg = []; this.lastSeg = null;
       this.stripes = []; this.stripesFrame = -1;
       this.speed = null; this.view = null; this.target = null;
       this.frame = -1; this.state = null;
-      this.timing = { model: [], seg: [], dd3d: [], segFrames: [], lag: [] };
+      this.timing = { model: [], seg: [], segFrames: [], lag: [] };
     }
     onMeta(meta) { this.meta = meta; this.reset(); }
 
@@ -830,99 +612,36 @@
       else if (!this.meta) return;
       else if (msg.kind === 'D') this.step(msg);
       else if (msg.kind === 'S') { this.pendingSeg.push(msg); keepLast(this.timing.seg, msg.ms, 50); }
-      else if (msg.kind === 'B') { this.pendingBoxes.set(msg.frame, readBoxes(msg)); keepLast(this.timing.dd3d, msg.ms, 50); }
     }
 
-    // One 20 Hz frame of the driving model's outputs, and whatever perception has arrived since the last.
+    // One 20 Hz frame of the driving model's outputs, and the newest segmentation that has arrived since the last.
     step(msg) {
       if (!this.meta.drive || !this.meta.drive.length) return null;  // a live server's meta before its first frame
-      const cam = this.cam, k = msg.frame;
+      const k = msg.frame;
       if (this.frame >= 0 && (k <= this.frame || k > this.frame + 40)) this.reset();  // a seek, a restart, or a long gap
       const raw = parseDrive(msg.values, this.meta.drive);
       const out = this.smoother.smooth(raw);
       keepLast(this.timing.model, msg.ms, 50);
-      const pose = raw.pose;
-      this.trail.add(k, pose);
-      const egoT = [pose[0] * DT * Math.max(k - this.frame, 1), pose[1] * DT * Math.max(k - this.frame, 1)];
-      const egoYaw = pose[5] * DT * Math.max(k - this.frame, 1);
+      this.trail.add(k, raw.pose);
       this.frame = k;
-      if (raw.lead_prob[0] > 0.5) this.leads.set(k, [leadAt(raw.lead, 0, 0, 0), leadAt(raw.lead, 0, 0, 1), Math.max(raw.lead_stds[0], 0.5)]);
-      for (const f of this.leads.keys()) { if (f < k - 60) this.leads.delete(f); else break; }
 
       const px = [], pz = [], py = [];
       for (let i = 0; i < IDX_N; i++) { px.push(plan(out.plan, i, 0)); py.push(plan(out.plan, i, 1)); pz.push(plan(out.plan, i, 2)); }
       const moving = px[IDX_N - 1] > px[0] + 1;
       const zpath = moving ? (x) => interp(x, px, pz) : () => 0;
-      const pathY = moving ? (x) => interp(x, px, py) : () => 0;
       const laneY = X_IDXS.map((_, i) => (lane(out.lane_lines, 1, i, 0) + lane(out.lane_lines, 2, i, 0)) / 2);
       const slopes = laneY.slice(1).map((y, i) => (y - laneY[i]) / (X_IDXS[i + 1] - X_IDXS[i]));
       const laneHeading = (x) => Math.atan(interp(x, X_IDXS.slice(1), slopes));
 
-      // the newest segmentation, moved from the frame it saw into this one
-      const meas = [];
+      // the newest segmentation, into the road map from the pose it was seen at
       const segMsg = this.pendingSeg.length ? this.pendingSeg[this.pendingSeg.length - 1] : null;
       this.pendingSeg = [];
       if (segMsg && this.trail.pose(segMsg.frame)) {
-        const seg = readSeg(segMsg, this.meta), pSeg = this.trail.pose(segMsg.frame), pNow = this.trail.pose(k);
         keepLast(this.timing.segFrames, segMsg.frame, 20);
         keepLast(this.timing.lag, k - segMsg.frame, 20);
-        this.roadmap.observe(pSeg, seg, zpath);
-        const objs = corridorObjects(cam, seg, zpath, pathY);
-        // the model's lead range beats corridor depth (which assumes the road keeps its near-field slope):
-        // fuse it into the nearest vehicle in the lead's lane
-        const ld = this.leads.get(segMsg.frame);
-        if (ld) {
-          const [lx, ly, sl] = ld;
-          const inLane = objs.filter((o) => o.name !== 'person' && Math.abs(o.xy[1] - ly) < 1.8 && Math.abs(o.xy[0] - lx) < 0.5 * lx + 5);
-          if (inLane.length) {
-            const o = inLane.reduce((a, b) => (b.xy[0] < a.xy[0] ? b : a));
-            const x = (o.xy[0] / o.sigma ** 2 + lx / sl ** 2) / (1 / o.sigma ** 2 + 1 / sl ** 2);
-            o.xy = [x, o.xy[1]];
-            o.sigma = 1 / Math.sqrt(1 / o.sigma ** 2 + 1 / sl ** 2);
-          }
-        }
-        const boxes = this.pendingBoxes.get(segMsg.frame) || null;
-        for (const f of [...this.pendingBoxes.keys()]) if (f <= segMsg.frame) this.pendingBoxes.delete(f);
-        const dyaw = pSeg[2] - pNow[2];
-        for (const o of objs) {
-          const [wx, wy] = this.trail.egoToWorld(pSeg, o.xy[0], o.xy[1]);
-          const xy = this.trail.worldToEgo(pNow, wx, wy);
-          const extra = { h: o.h };
-          const m = boxes && o.name !== 'person' ? matchDD3D(boxes, o.box, o.name) : null;
-          if (m) {
-            const w = m.score3d * clamp(40 / Math.max(m.range, 1), 0.3, 1), yaw = m.yaw + dyaw;
-            extra.pose = { yaw, w };
-            extra.dir = [0.8 * w * Math.cos(yaw), 0.8 * w * Math.sin(yaw)];  // DD3D also tells front from back
-          }
-          meas.push({ group: o.name === 'person' ? 'person' : 'vehicle', name: o.name, xy, sigma: o.sigma, extra });
-        }
-      }
-
-      const visible = (x, y) => {
-        const [u, v, z] = cam.project(x, y, cam.height - 0.7), m = 0.04;
-        return z > 2 && u >= m * cam.w && u < (1 - m) * cam.w && v >= m * cam.h && v < (1 - m) * cam.h;
-      };
-      this.tracker.step(meas, egoT, egoYaw, visible);
-      for (const t of this.tracker.tracks) {
-        if (t.static && t.heading !== null) continue;
-        const sp = Math.hypot(t.x[2], t.x[3]), vStd = Math.sqrt(t.P[2][2] + t.P[3][3]);
-        const lh = laneHeading(t.x[0]);
-        if (t.name !== 'person') { t.heading = fuseHeading(t, sp, vStd, lh); continue; }
-        const prev = t.heading !== null ? t.heading : lh;
-        const nw = Math.cos(prev - lh) >= 0 ? lh : lh + Math.PI;
-        t.heading = t.heading === null ? nw : t.heading + 0.15 * wrap(nw - t.heading);
-      }
-      this.tracker.mergeDuplicates();
-      const confirmed = this.tracker.confirmed();
-      const modelLead = out.lead_prob[0] > 0.5 ? leadAt(out.lead, 0, 0, 0) : null;
-      let leadTrack = null;
-      if (modelLead !== null) {
-        const ly = leadAt(out.lead, 0, 0, 1);
-        let best = 4.0;
-        for (const t of confirmed) {
-          const d = Math.hypot(t.x[0] - modelLead, t.x[1] - ly);
-          if (t.name !== 'person' && d < best) { best = d; leadTrack = t; }
-        }
+        const seg = readSeg(segMsg, this.meta);
+        this.roadmap.observe(this.trail.pose(segMsg.frame), seg, zpath);
+        this.lastSeg = { frame: segMsg.frame, seg };
       }
 
       // crosswalk stripes, re-cut as the map fills in
@@ -930,6 +649,19 @@
       if (segMsg && k - this.stripesFrame >= 6) {
         this.stripes = this.roadmap.crosswalks(pNow, laneHeading);
         this.stripesFrame = k;
+      }
+
+      // this frame's lead, as this frame predicts it: the distance to its rear and its offset, facing along the
+      // ego lane there (its lines reach 192 m; the plan, laid out in time, can end short of a slow car's lead and
+      // turn back at its end), braking when its predicted acceleration says so. Only where the newest segmentation,
+      // at most SEG_FRESH frames old, has a vehicle; none without one.
+      let lead = null;
+      const fresh = this.lastSeg && k - this.lastSeg.frame <= SEG_FRESH ? this.lastSeg.seg : null;
+      if (raw.lead_prob[0] > 0.5 && fresh) {
+        const x = leadAt(raw.lead, 0, 0, 0), y = leadAt(raw.lead, 0, 0, 1);
+        if (segSeesVehicle(this.cam, fresh, x, y, this.cam.height + zpath(x))) {
+          lead = { x, y, heading: laneHeading(x), braking: leadAt(raw.lead, 0, 0, 3) < -0.8 };
+        }
       }
 
       // road view at speed, bird's-eye below it, panning between the two
@@ -941,13 +673,11 @@
       else if (this.target === 1 && mph > o.roadAbove) this.target = 0;
       const stepS = DT / o.panSeconds;
       this.view = this.view === null ? this.target : clamp(this.view + Math.sign(this.target - this.view) * stepS, Math.min(this.view, this.target), Math.max(this.view, this.target));
-      const leadA = modelLead !== null ? leadAt(out.lead, 0, 0, 3) : 0;
-      this.leadBrake = 0.85 * (this.leadBrake || 0) + 0.15 * (leadA < -0.8 ? 1 : 0);
 
       this.state = {
-        frame: k, seconds: msg.seconds, out, px, py, pz, zpath, tracks: confirmed, leadTrack, modelLead,
-        pose: pNow, stripes: this.stripes, view: smoothstep(0, 1, this.view), leadBrake: this.leadBrake,
-        hud: { v: this.speed, a: plan(out.plan, 0, 6), lead: leadTrack ? leadTrack.x[0] : modelLead },
+        frame: k, seconds: msg.seconds, out, px, py, pz, zpath, lead,
+        pose: pNow, stripes: this.stripes, view: smoothstep(0, 1, this.view),
+        hud: { v: this.speed, a: plan(out.plan, 0, 6), lead: lead ? lead.x : null },
       };
       return this.state;
     }
@@ -956,10 +686,10 @@
   function keepLast(arr, v, n) { arr.push(v); if (arr.length > n) arr.shift(); }
 
   const api = {
-    FPS, DT, MPH, IDX_N, X_IDXS, EGO_FRONT, EGO_REAR, VEHICLES,
+    FPS, DT, MPH, IDX_N, X_IDXS, EGO_FRONT, EGO_REAR,
     clamp, smoothstep, interp, percentile, m3mul, m3inv, m3vec, VIEW_FROM_DEVICE,
-    decode, readFile, parseDrive, plan, lane, leadAt, FrameCamera, Tracker, Track, RoadMap, Engine,
-    readSeg, corridorObjects, readBoxes, matchDD3D, fuseHeading, morph, runs, components,
+    decode, readFile, parseDrive, plan, lane, leadAt, FrameCamera, RoadMap, Engine,
+    readSeg, segSeesVehicle, morph, runs, components,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.DioramaEngine = api;
