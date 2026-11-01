@@ -52,6 +52,13 @@ struct SettingsScreen: View {
         } footer: {
           Text("Jetlink has to stay open while you drive.")
         }
+        Section {
+          Toggle("Run Diorama on This \(ThisDevice.name)", isOn: $settings.dioramaOnPhone)
+        } header: {
+          Text("Diorama")
+        } footer: {
+          Text(DioramaOnPhone.cost)
+        }
         storage
         help
         about

@@ -1,11 +1,11 @@
 import Foundation
 import JetlinkDiorama
+import JetlinkDioramaUI
 import JetlinkKit
 import JetlinkORT
 import JetlinkRegistry
 import JetlinkServer
 import Observation
-import Synchronization
 import os
 
 /// What the running server is, for Status and the menu bar: the choice it
@@ -68,6 +68,8 @@ final class ServerStore: ServerControlling {
   @ObservationIgnored private var logTask: Task<Void, Never>?
   /// Diorama's stage on the running server's frames, when its models are there.
   private(set) var diorama: DioramaStage?
+  /// The stage, for the Diorama view's page.
+  private(set) var dioramaFeed: StageFeed?
   /// Why there is no stage, for the Diorama view.
   private(set) var dioramaProblem: String?
 
@@ -85,6 +87,11 @@ final class ServerStore: ServerControlling {
       sleepAssertion.startObservingPowerSource()
       // stopped, so this clears a lid flag a crashed run left set
       updateSleepAssertion()
+      dioramaDownloads.finished = { [weak self] in
+        // on the running server at once: no restart
+        if let self, let embedded = self.embedded, self.diorama == nil { self.attachDiorama(embedded) }
+      }
+      watchDioramaShare()
     }
   }
 
@@ -192,7 +199,9 @@ final class ServerStore: ServerControlling {
       stage.start()
       embedded.server.host.frameObserver = stage
       diorama = stage
+      dioramaFeed = StageFeed(stage: stage)
       dioramaProblem = nil
+      broadcaster?.setStage(stage)
     } catch {
       dioramaProblem = "\(error)"
     }
@@ -200,83 +209,59 @@ final class ServerStore: ServerControlling {
 
   // MARK: Diorama's models
 
-  enum DioramaDownload: Equatable {
-    case idle
-    /// Asking the repo what there is to fetch.
-    case checking
-    /// The user agrees to the licenses and the size first.
-    case confirm(bytes: Int64)
-    case downloading(Double)
-    case failed(String)
-  }
+  /// The models' download, for the Diorama view; once they are in, the
+  /// running server picks them up.
+  let dioramaDownloads = DioramaDownloads()
 
-  private(set) var dioramaDownload: DioramaDownload = .idle
-  @ObservationIgnored private var dioramaPlan: DioramaModels.Plan?
-  @ObservationIgnored private var dioramaTask: Task<Void, Never>?
-  @ObservationIgnored private var dioramaStop = StopFlag()
+  // MARK: Diorama on iPhones nearby
 
-  /// Looks up the models' files and sizes, then waits for `downloadDiorama()`.
-  func checkDiorama() {
-    guard dioramaTask == nil else { return }
-    dioramaDownload = .checking
-    dioramaTask = Task { [weak self] in
-      do {
-        // a mirror with Hugging Face's layout, for testing: -dioramaModelsHost http://...
-        let host = UserDefaults.standard.string(forKey: "dioramaModelsHost") ?? DioramaModels.defaultHost
-        let plan = try await DioramaModels.plan(host: host, coreml: true)
-        self?.dioramaPlan = plan
-        self?.dioramaDownload = .confirm(bytes: plan.bytes)
-      } catch {
-        self?.dioramaDownload = .failed((error as? RegistryError)?.message ?? "\(error)")
-      }
-      self?.dioramaTask = nil
+  /// The iPhones watching, while Settings has Diorama shown on them.
+  private(set) var dioramaViewers: [DioramaBroadcaster.Viewer] = []
+  /// Why iPhones cannot find the Mac, when the listener did not start.
+  private(set) var dioramaShareProblem: String?
+  @ObservationIgnored private var broadcaster: DioramaBroadcaster?
+
+  /// Advertises while the setting is on, whether or not the server runs: an
+  /// iPhone that finds the Mac waits there for the comma.
+  private func watchDioramaShare() {
+    withObservationTracking {
+      updateDioramaShare(settings.dioramaShare)
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.watchDioramaShare() }
     }
   }
 
-  /// Into the Diorama folder, then on the running server at once: no restart.
-  func downloadDiorama() {
-    guard dioramaTask == nil, let plan = dioramaPlan else { return }
-    let folder = settings.dioramaFolder
-    let stop = StopFlag()
-    dioramaStop = stop
-    dioramaDownload = .downloading(0)
-    dioramaTask = Task { [weak self] in
+  /// Every iPhone watching is let go; each may connect again.
+  func disconnectDioramaViewers() {
+    broadcaster?.dropViewers()
+  }
+
+  private func updateDioramaShare(_ on: Bool) {
+    if on, broadcaster == nil {
+      let broadcaster = DioramaBroadcaster()
+      broadcaster.onChange = { [weak self] viewers in Task { @MainActor in self?.dioramaViewers = viewers } }
       do {
-        try await DioramaModels.fetch(
-          plan, into: folder,
-          progress: { fraction in
-            // each hop is a task of its own, so they may land out of order: the bar only grows
-            Task { @MainActor in if case .downloading(let shown) = self?.dioramaDownload, fraction > shown { self?.dioramaDownload = .downloading(fraction) } }
-          },
-          shouldStop: { stop.isSet })
-        self?.dioramaDownload = .idle
-        self?.dioramaPlan = nil
-        if let self, let embedded = self.embedded, self.diorama == nil { self.attachDiorama(embedded) }
-      } catch let error as RegistryError where error.kind == .cancelled {
-        self?.dioramaDownload = .idle
+        try broadcaster.start()
+        broadcaster.setStage(diorama)
+        self.broadcaster = broadcaster
+        dioramaShareProblem = nil
       } catch {
-        self?.dioramaDownload = .failed((error as? RegistryError)?.message ?? "\(error)")
+        dioramaShareProblem = "\(error)"
+        log.error("Diorama cannot be shown on iPhones nearby: \(error, privacy: .public)")
       }
-      self?.dioramaTask = nil
+    } else if !on, let broadcaster {
+      broadcaster.stop()
+      self.broadcaster = nil
+      dioramaViewers = []
     }
-  }
-
-  func cancelDioramaDownload() {
-    dioramaStop.set()
-    if case .confirm = dioramaDownload { dioramaDownload = .idle }
-  }
-
-  /// Asked between a download's chunks, set from the main actor.
-  private final class StopFlag: Sendable {
-    private let value = Atomic<Bool>(false)
-    var isSet: Bool { value.load(ordering: .relaxed) }
-    func set() { value.store(true, ordering: .relaxed) }
   }
 
   private func tearDown() {
     embedded?.server.host.frameObserver = nil
+    broadcaster?.setStage(nil)
     diorama?.stop()
     diorama = nil
+    dioramaFeed = nil
     embedded = nil
     consumeTask?.cancel()
     consumeTask = nil

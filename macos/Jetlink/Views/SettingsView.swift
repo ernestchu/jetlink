@@ -87,7 +87,16 @@ struct GeneralSettingsView: View {
             }
           }
           Text(
-            "The models Diorama draws the drive with: downloaded from the Diorama view, or as `python -m diorama export` writes them. They run on the GPU only while the Diorama view is open. A folder chosen here takes effect when the server restarts."
+            "The models Diorama draws the drive with: downloaded from the Diorama view, or as `python -m diorama export` writes them. They run on the GPU only while the Diorama view is open, or an iPhone watches. A folder chosen here takes effect when the server restarts."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle("Show on iPhones nearby", isOn: $settings.dioramaShare)
+          Text(
+            "An iPhone with Jetlink can watch the drive in its Diorama tab, over Wi-Fi peer to peer: it needs no network in common with the Mac, so it can be joined to the car for CarPlay. Any iPhone nearby running Jetlink can watch while this is on; the Diorama view lists them."
           )
           .font(.callout)
           .foregroundStyle(.secondary)

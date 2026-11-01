@@ -26,6 +26,8 @@ let package = Package(
       .product(name: "JetlinkRegistry", package: "JetlinkKit"),
       .product(name: "JetlinkServer", package: "JetlinkKit"),
       .product(name: "JetlinkORT", package: "JetlinkKit"),
+      .product(name: "JetlinkDiorama", package: "JetlinkKit"),
+      .product(name: "JetlinkDioramaUI", package: "JetlinkKit"),
     ], swiftSettings: [.swiftLanguageMode(.v6)]),
   ]
 )

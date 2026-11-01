@@ -25,6 +25,10 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     public var backOff: TimeInterval = 3
     /// Messages a watcher may fall behind by before it is dropped.
     public var behind = 256
+    /// The share of the time the models may run: after a run of t, they
+    /// rest t × (1 / duty − 1). An iPhone, whose GPU has the driving model's
+    /// second half, asks for less than all of it.
+    public var duty: Double = 1
     public init() {}
   }
 
@@ -105,6 +109,8 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   private var preparing = false
   private var loadFailed = false
   private let half: [UInt16] = (0..<256).map { DioramaStage.float16Bits(Float($0)) }
+  /// Until when the models rest after a run, by `Limits.duty`: the stage's thread's own.
+  private var restUntil: UInt64 = 0
 
   public init(models: Models, limits: Limits = Limits(), makeEngine: @escaping EngineFactory) {
     self.models = models
@@ -246,10 +252,15 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       if let seen { showSeen(seen, frameID) }
       // a pause does not stop a build, and must not hide why the models never run
       if paused && !preparingOrFailed { setStatus("paused: the driving model ran slow") }
-      guard let frame, let seg = engine() else { continue }
+      guard let frame, DispatchTime.now().uptimeNanoseconds >= restUntil, let seg = engine() else { continue }
       setStatus("running")
+      let started = DispatchTime.now().uptimeNanoseconds
       if let message = run(seg, frame, { segMessage($0, frameID, $1) }) {
         broadcast(message)
+      }
+      if limits.duty < 1 {
+        let took = DispatchTime.now().uptimeNanoseconds - started
+        restUntil = DispatchTime.now().uptimeNanoseconds + UInt64(Double(took) * (1 / max(limits.duty, 0.05) - 1))
       }
     }
   }

@@ -7,12 +7,13 @@ appears in it.
 
 <a href="images/diorama.webp"><img src="images/diorama.webp" width="100%" alt="A recorded drive in the Diorama viewer: the road camera on the left, Diorama's bird's-eye view on the right with the lead car in blue ahead of the planned path; below, the driving model's and the segmentation's timings"></a>
 
-It runs in three places, all with the same page:
+It runs in four places, all with the same page:
 
 | Where | How to open it |
 | --- | --- |
 | Jetson or Linux PC | `http://<host>:<status port>/diorama/` on the web page, with `--diorama` ([below](#live-on-a-jetson-or-linux-pc)) |
 | Mac app | **Diorama** in the sidebar (⌘5) |
+| iPhone app | the **Diorama** tab: watching a Mac nearby, or on the iPhone's own server ([below](#iphone)) |
 | A recorded drive, on any computer | `python -m diorama view` ([below](#try-it-on-your-own-footage)), beside the drive's own footage |
 
 ## How it works
@@ -46,7 +47,7 @@ The view sits behind the car at speed and pans to a bird's-eye view below
 **The comma comes first:**
 
 - The server hands Diorama the frame only after the reply has gone to the comma.
-- The models run only while a page or the Mac view is open.
+- The models run only while a page, the Mac view or an app's Diorama tab is open.
 - They pause for 3 s after any driving frame slower than 40 ms
   (`--diorama-pause-ms`), since they share the GPU with the driving model.
 
@@ -174,6 +175,11 @@ takes a few minutes.
 **Model input**, beside the timings, shows the frame the model sees with its
 segmentation over it, as on the [web page](#live-on-a-jetson-or-linux-pc).
 
+To watch the drive on an iPhone in a car mount, turn on **Settings > General >
+Diorama > Show on iPhones nearby** ([iPhone](#iphone)). While it is on, the
+Diorama view's toolbar says how many iPhones are watching; click it to see
+which, or to disconnect them all.
+
 ### Publish the model for the app
 
 The Mac app downloads what `ernestchu/jetlink-diorama` holds: `diorama.json`
@@ -189,6 +195,78 @@ The app reads each graph's SHA-256 and size from the repo's file listing, so
 nothing else needs updating. A new export replaces the graphs on the next
 download; a Mac that has the old ones keeps them until its folder is emptied.
 
+## iPhone
+
+The **Diorama** tab has two sources, picked at its top:
+
+- **Mac:** a Mac nearby runs Jetlink, the comma and the model, and the iPhone
+  only shows the drive. It runs no Diorama model, and no comma needs to be on
+  its cable. This is the one for a car mount.
+- **This iPhone:** the iPhone's own server, with the comma on its USB cable,
+  runs the model too. It is off until **Turn On** in the tab, or **Settings >
+  Diorama**, and the tab says what it costs.
+
+The screen stays on while the tab shows the drive.
+
+### Watching a Mac
+
+On the Mac, turn on **Settings > General > Diorama > Show on iPhones nearby**.
+On the iPhone, open the Diorama tab and pick **Mac**. It finds the Mac by
+itself, and the page shows "Waiting for the comma…" until a drive comes. With
+more than one Mac showing the drive, the Mac button at the top right picks one,
+and the iPhone remembers it.
+
+The two need no network in common: they find each other over Wi-Fi peer to
+peer (AWDL), the way AirDrop does. An iPhone using **wireless CarPlay** has
+its Wi-Fi joined to the car, with no internet and no Mac on it, and still
+finds the Mac this way. Both need Wi-Fi turned on, and the iPhone asks once
+for Local Network access.
+
+- **The design:**
+  - The Mac's app runs an `NWListener` that advertises
+    `_jetlink-diorama._tcp` over Bonjour, with `includePeerToPeer`, so it is
+    found over AWDL as well as on any network the two share. It listens
+    whether or not the server runs.
+  - The iPhone runs an `NWBrowser` for the same service, connects to the Mac
+    it found, and connects again a second after any drop. It looks only while
+    the tab is in front: it stops when the app goes to the background, and
+    looks again when it comes back.
+  - Each viewer gets a watcher of its own on the stage, from the meta on, just
+    as the Mac's own view does; the models run while any watcher is there. A
+    new stage, when the Mac's server restarts, keeps viewers connected and
+    starts them over from its meta.
+- **What crosses:** the [messages](#messages), not video, each after its u32
+  little-endian length exactly as a `drive.diorama` holds them. A replayed
+  drive measured about 180 KB/s (20 drive messages and 10 segmentations a
+  second), well within what AWDL carries beside CarPlay. **Model input** on
+  the iPhone adds the frames the model sees, about 1.8 MB/s.
+- **Back the other way:** what the page posts, in the same framing: `hello:`
+  and the iPhone's name, then `ready`, `input:on` or `input:off`, sent again
+  on each new connection.
+- **A slow iPhone:** neither end queues more than it can hand on. The iPhone
+  reads again only once its page has taken the last batch, and the Mac sends
+  again only once the last send has left. A viewer that falls behind backs up
+  into its watcher, which the stage drops past 256 messages; it is watched
+  again from a fresh meta, which the page starts over from.
+- **Who can watch:** any iPhone nearby running Jetlink, while the Mac's
+  setting is on. It is off by default, and the Mac's toolbar lists who is
+  watching. The messages are the drawing's inputs (the road, the lead, the
+  driving model's outputs), not the camera, unless a viewer turns on **Model
+  input**.
+
+### On the iPhone itself
+
+With **This iPhone** turned on, the tab downloads the CoreML package, about
+510 MB, after the same licence sheet as the Mac's, into the app's Application
+Support (out of iCloud backups). The phone's server then runs it on the GPU
+on the frames it serves, while the tab is open.
+
+The driving model splits the iPhone's Neural Engine and GPU, so the two share
+the GPU. As well as pausing after a slow driving frame, the stage takes at
+most half the GPU's time on an iPhone (`Limits.duty`): after a segmentation
+of t ms, it rests another t ms. Its latency, heat and the driving model's
+frame times beside it have not been measured on an iPhone yet.
+
 ## What it costs
 
 | Host | Segmentation | Notes |
@@ -201,6 +279,7 @@ download; a Mac that has the old ones keeps them until its folder is emptied.
 | M5 Pro Mac, onnxruntime CoreML on the GPU | 185 ms | the ONNX graph: about 5 Hz. First compile about 2 minutes |
 | M5 Pro Mac, onnxruntime CPU | 275 ms | |
 | Jetson Orin | not measured yet | |
+| iPhone, native CoreML on the GPU | not measured yet | at most half the GPU's time |
 
 The Mac's and the 4090's driving-model latencies were measured with DD3D
 running too, before it was dropped.
@@ -232,10 +311,10 @@ percentile, 22 ms at most when it re-cuts crosswalk stripes).
 
 ## Messages
 
-The server's `/diorama/events` stream, a recorded `drive.diorama`, and the Mac
-app all carry the same messages. Each one is a kind byte, then its fields,
-little-endian. In a file, each message follows its u32 length; on the event
-stream, each is one base64 `data:` line.
+The server's `/diorama/events` stream, a recorded `drive.diorama`, the Mac
+app and a Mac's iPhone viewers all carry the same messages. Each one is a kind
+byte, then its fields, little-endian. In a file and to an iPhone, each message
+follows its u32 length; on the event stream, each is one base64 `data:` line.
 
 | Kind | Fields |
 | --- | --- |
@@ -243,7 +322,7 @@ stream, each is one base64 `data:` line.
 | `D` drive | u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs |
 | `S` seg | u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] class (255 dropped), u8[queries] score × 255, u32 runs, then (u8 query, u8 length − 1) per run |
 | `T` status | UTF-8: what the segmentation is doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only: the page shows it beside the timings when it is not running |
-| `I` input | u32 frame, u16 width, u16 height, u8 planes, then the packed narrow frame the models see (four Y planes, U, V). Live only, and only to a page that asks: the web page's **Model input** toggle on `/diorama/events/frames`, or the Mac view's |
+| `I` input | u32 frame, u16 width, u16 height, u8 planes, then the packed narrow frame the models see (four Y planes, U, V). Live only, and only to a page that asks: the web page's **Model input** toggle on `/diorama/events/frames`, or the Mac view's or iPhone tab's |
 
 `diorama/packets.py` writes them and diorama-engine.js reads them.
 `DioramaPackets.swift` matches the Python byte for byte, which

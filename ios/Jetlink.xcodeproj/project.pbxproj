@@ -12,6 +12,7 @@
 		19B4F58262E92BFF0D8E1DAC /* DeviceHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97D183B499FE3A9E2A1F1C6C /* DeviceHealth.swift */; };
 		1D0A668C1539B8689D46AE98 /* StatusScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DF5CD5EDD3C0D6A4DBAF03F /* StatusScreen.swift */; };
 		21FA66960B064655822E91A9 /* USBSpeedGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 307335BF2002E595A3A053AD /* USBSpeedGuide.swift */; };
+		2556898E0D52D89ABF362F5B /* JetlinkDioramaUI in Frameworks */ = {isa = PBXBuildFile; productRef = BF27932D7F8E85C99D25FA41 /* JetlinkDioramaUI */; };
 		343E2DEDC2FA6A0FA1C3CD9F /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA25A3A098F7C2EDFC752AA6 /* SettingsScreen.swift */; };
 		3621BC8C8E848D685FB21407 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BBD8FD990F83901290E13A3 /* RootView.swift */; };
 		4F73EECC86A909ED778A1FE6 /* NetworkInterfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B61B41EBDB9F3F6A507D23F /* NetworkInterfaces.swift */; };
@@ -19,10 +20,12 @@
 		5B0ED2BA13F028709B8112E7 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43DBEE74070286C6D86FE93C /* AppModel.swift */; };
 		5B9AEE63E5A1029EBFC6A959 /* ConnectHelpScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3843B2EC9EF59B50A3E51E3 /* ConnectHelpScreen.swift */; };
 		704C60823F8F013189311EEF /* DeviceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F37E4DCE1D8F75581B01BA63 /* DeviceMonitor.swift */; };
+		83338BB680223655C1353512 /* DioramaScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE67C31C89E1CD0D2BF6DFC /* DioramaScreen.swift */; };
 		867D4BEC3B41AABE9BE09147 /* JetlinkPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BC10AE5D7D06DBE4A59332 /* JetlinkPhoneApp.swift */; };
 		89984B76F7548E2CC6D912A3 /* BenchmarkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 459618D24B415A21929758C5 /* BenchmarkScreen.swift */; };
 		94ED96F702D5DF67F92CDF54 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2195EBEDFD0F7923BA8F565A /* PrivacyInfo.xcprivacy */; };
 		A5E4E102CDE0D258167999C2 /* LocalNetworkAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */; };
+		AA4278F875C641962A020384 /* JetlinkDiorama in Frameworks */ = {isa = PBXBuildFile; productRef = 46866AE666123C314E10C52B /* JetlinkDiorama */; };
 		AB2684B23066DDD9F23FD099 /* ModelsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35A2D25446BA8901A1ACC8B /* ModelsScreen.swift */; };
 		ADFB4A5A28CCC9EF06EB05C0 /* PhoneServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8965401CE0D537AAE299392 /* PhoneServer.swift */; };
 		BC2C8BEE97C8C36333DCE538 /* JetlinkRegistry in Frameworks */ = {isa = PBXBuildFile; productRef = 274CFEF8A0044F990232F4AE /* JetlinkRegistry */; };
@@ -47,6 +50,7 @@
 		4460F447D4E35D304487C46F /* HeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeroCard.swift; sourceTree = "<group>"; };
 		459618D24B415A21929758C5 /* BenchmarkScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkScreen.swift; sourceTree = "<group>"; };
 		4B61B41EBDB9F3F6A507D23F /* NetworkInterfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkInterfaces.swift; sourceTree = "<group>"; };
+		5DE67C31C89E1CD0D2BF6DFC /* DioramaScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DioramaScreen.swift; sourceTree = "<group>"; };
 		6054CA347A624AC4AB57AB2D /* StatusContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusContent.swift; sourceTree = "<group>"; };
 		6B71A2709AC0F259D4486CB6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7BBD8FD990F83901290E13A3 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -74,6 +78,8 @@
 				BC2C8BEE97C8C36333DCE538 /* JetlinkRegistry in Frameworks */,
 				C97C593B2028CC112617A42C /* JetlinkServer in Frameworks */,
 				C5A26CB41E0083A447B027D2 /* JetlinkORT in Frameworks */,
+				AA4278F875C641962A020384 /* JetlinkDiorama in Frameworks */,
+				2556898E0D52D89ABF362F5B /* JetlinkDioramaUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,6 +158,7 @@
 				7BBD8FD990F83901290E13A3 /* RootView.swift */,
 				9FDD04C9BDECA590A9FBE814 /* Benchmark */,
 				C794CBAC723A211E853C3A05 /* Components */,
+				F8F7564800CEBEFEE0A6CD19 /* Diorama */,
 				FF62D7785BD039974F290EEA /* Logs */,
 				5C16C704A11658C20EC2EA92 /* Models */,
 				318EB7FF480D358BE2CCCDBB /* Settings */,
@@ -215,6 +222,14 @@
 			path = Device;
 			sourceTree = "<group>";
 		};
+		F8F7564800CEBEFEE0A6CD19 /* Diorama */ = {
+			isa = PBXGroup;
+			children = (
+				5DE67C31C89E1CD0D2BF6DFC /* DioramaScreen.swift */,
+			);
+			path = Diorama;
+			sourceTree = "<group>";
+		};
 		FD09DA6C3EC5F2D7480C04F5 /* Config */ = {
 			isa = PBXGroup;
 			children = (
@@ -253,6 +268,8 @@
 				274CFEF8A0044F990232F4AE /* JetlinkRegistry */,
 				18188F707063EC9D73EC6510 /* JetlinkServer */,
 				278B898DF1DED4B7671FF5F5 /* JetlinkORT */,
+				46866AE666123C314E10C52B /* JetlinkDiorama */,
+				BF27932D7F8E85C99D25FA41 /* JetlinkDioramaUI */,
 			);
 			productName = Jetlink;
 			productReference = C8ECBD9F702381594E2513CB /* Jetlink.app */;
@@ -318,6 +335,7 @@
 				5B9AEE63E5A1029EBFC6A959 /* ConnectHelpScreen.swift in Sources */,
 				19B4F58262E92BFF0D8E1DAC /* DeviceHealth.swift in Sources */,
 				704C60823F8F013189311EEF /* DeviceMonitor.swift in Sources */,
+				83338BB680223655C1353512 /* DioramaScreen.swift in Sources */,
 				E5DB00B5FA009F7E3B0BAB9D /* HeroCard.swift in Sources */,
 				867D4BEC3B41AABE9BE09147 /* JetlinkPhoneApp.swift in Sources */,
 				A5E4E102CDE0D258167999C2 /* LocalNetworkAccess.swift in Sources */,
@@ -550,9 +568,17 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = JetlinkORT;
 		};
+		46866AE666123C314E10C52B /* JetlinkDiorama */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JetlinkDiorama;
+		};
 		95031BC76E32EFCF41AB88C6 /* JetlinkUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JetlinkUI;
+		};
+		BF27932D7F8E85C99D25FA41 /* JetlinkDioramaUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JetlinkDioramaUI;
 		};
 		EE168AFAF92FF522E4DD799C /* JetlinkKit */ = {
 			isa = XCSwiftPackageProductDependency;

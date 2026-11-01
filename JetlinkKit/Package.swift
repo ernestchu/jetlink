@@ -47,6 +47,7 @@ let package = Package(
     .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
     .library(name: "JetlinkLiteRT", targets: ["JetlinkLiteRT"]),
     .library(name: "JetlinkDiorama", targets: ["JetlinkDiorama"]),
+    .library(name: "JetlinkDioramaUI", targets: ["JetlinkDioramaUI"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
     .executable(name: "jetlink-server", targets: ["jetlink-server"]),
   ],
@@ -109,6 +110,9 @@ let package = Package(
       ]),
     // Diorama: the models on the frames a server answers, and the page that draws the drive.
     .target(name: "JetlinkDiorama", dependencies: ["JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")]),
+    // The page in a web view, its feeds and the models' download, for the Mac
+    // and iPhone apps alike; it compiles to nothing where there is no SwiftUI.
+    .target(name: "JetlinkDioramaUI", dependencies: ["JetlinkDiorama", "JetlinkRegistry", "JetlinkServer"]),
     // CryptoExtras for PBKDF2, on every platform: CommonCrypto's on Apple's,
     // BoringSSL's elsewhere.
     .target(
