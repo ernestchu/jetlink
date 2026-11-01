@@ -6,9 +6,6 @@ import Foundation
 public enum DioramaPackets {
   /// The driving model's heads the page draws from, in the order a drive message carries them.
   public static let driveFields = ["plan", "lane_lines", "lane_lines_prob", "road_edges", "lead", "lead_prob", "pose"]
-  /// DD3D rows with a lower 3D score are not sent.
-  public static let boxMinScore: Float = 0.1
-  public static let boxColumns = 16
 
   public static func meta(_ info: [String: Any]) -> Data {
     var data = Data("M".utf8)
@@ -82,21 +79,6 @@ public enum DioramaPackets {
     }
     data.appendLE(count)
     data.append(runs)
-    return data
-  }
-
-  /// DD3D's rows with a 3D score worth sending.
-  public static func boxes(frame: UInt32, ms: Float, rows: UnsafeBufferPointer<Float>) -> Data {
-    let n = rows.count / boxColumns
-    let keep = (0..<n).filter { rows[$0 * boxColumns + 6] >= boxMinScore }
-    var data = Data(capacity: 11 + keep.count * boxColumns * 4)
-    data.append(UInt8(ascii: "B"))
-    data.appendLE(frame)
-    data.appendLE(ms.bitPattern)
-    data.appendLE(UInt16(keep.count))
-    for r in keep {
-      for c in 0..<boxColumns { data.appendLE(rows[r * boxColumns + c].bitPattern) }
-    }
     return data
   }
 }

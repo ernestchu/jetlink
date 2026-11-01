@@ -33,7 +33,7 @@ struct DioramaView: View {
             Text(server.runState == .serving ? "Restart the server to load the models." : "Start the server to see the drive.")
           } else {
             Text(
-              "Diorama draws the drive with two models, about 720 MB, that run on the GPU only while this view is open. Download them into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported them to in Settings."
+              "Diorama draws the drive with a segmentation model, about 510 MB, that runs on the GPU only while this view is open. Download it into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported it to in Settings."
             )
           }
           if hasModels, let problem = server.dioramaProblem {
@@ -79,7 +79,7 @@ struct DioramaView: View {
   }
 }
 
-/// Before 720 MB comes down: what it is, where it goes, and whose terms it comes under.
+/// Before 510 MB comes down: what it is, where it goes, and whose terms it comes under.
 struct DioramaLicenseSheet: View {
   let bytes: Int64
   let folder: URL
@@ -93,15 +93,14 @@ struct DioramaLicenseSheet: View {
       )
       .fixedSize(horizontal: false, vertical: true)
       VStack(alignment: .leading, spacing: 8) {
-        Text("**Segmentation:** Mask2Former by Meta. Its code is under the MIT License; its weights were trained on Mapillary Vistas, whose terms allow non-commercial use only.")
-          .fixedSize(horizontal: false, vertical: true)
+        Text(
+          "**Segmentation:** Mask2Former by Meta. Its code is under the MIT License; its weights were trained on Mapillary Vistas, whose terms allow non-commercial use only."
+        )
+        .fixedSize(horizontal: false, vertical: true)
         HStack(spacing: 14) {
           Link("Mask2Former", destination: URL(string: "https://huggingface.co/facebook/mask2former-swin-large-mapillary-vistas-panoptic")!)
           Link("Mapillary Vistas terms", destination: URL(string: "https://www.mapillary.com/dataset/vistas")!)
         }
-        Text("**Headings:** DD3D by Toyota Research Institute, code and weights under the MIT License.")
-          .fixedSize(horizontal: false, vertical: true)
-        Link("DD3D", destination: URL(string: "https://github.com/TRI-ML/dd3d")!)
       }
       .font(.callout)
       HStack {
@@ -162,12 +161,16 @@ struct DioramaWebView: NSViewRepresentable {
     weak var webView: WKWebView?
     private var watcher: DioramaStage.Watcher?
     private var relay: Task<Void, Never>?
+    /// The page's Model input toggle: the frames the models see as well.
+    private var input = false
 
     init(stage: DioramaStage) { self.stage = stage }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
       guard let body = message.body as? String else { return }
-      if body == "ready" {
+      if body == "ready" || body == "input:on" || body == "input:off" {
+        // the page asks once it is up, and again from the start when the toggle changes
+        input = body == "input:on"
         start()
       } else if body.hasPrefix("error: ") {
         Log.write(.warning, "diorama", "the page: \(body.dropFirst(7))")
@@ -186,7 +189,7 @@ struct DioramaWebView: NSViewRepresentable {
     func start() {
       stop()
       let stage = stage
-      let watcher = stage.watch()
+      let watcher = stage.watch(input: input)
       self.watcher = watcher
       relay = Task.detached(priority: .utility) { [weak self] in
         while !Task.isCancelled, let batch = stage.next(watcher, timeout: 0.5) {

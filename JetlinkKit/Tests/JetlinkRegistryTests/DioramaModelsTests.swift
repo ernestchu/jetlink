@@ -48,22 +48,23 @@ struct DioramaModelsTests {
     ]
   }
 
-  @Test func fetchesEveryGraphThenTheManifest() async throws {
+  @Test func fetchesTheSegmentationThenTheManifest() async throws {
     let tmp = try TemporaryDirectory()
     let net = MockNet(routes())
     let folder = tmp.url.appending(path: "diorama")
     let plan = try await DioramaModels.plan(session: net.session)
-    #expect(plan.files.map(\.path) == ["diorama_seg.onnx", "diorama_dd3d.onnx"])
-    #expect(plan.bytes == 8000)
+    // the manifest still names DD3D, as an older export's does: it is not fetched
+    #expect(plan.files.map(\.path) == ["diorama_seg.onnx"])
+    #expect(plan.bytes == 5000)
 
     let seen = ProgressLog()
     try await DioramaModels.fetch(plan, into: folder, session: net.session, progress: seen.callback)
     #expect(try Data(contentsOf: folder.appending(path: "diorama_seg.onnx")) == seg)
-    #expect(try Data(contentsOf: folder.appending(path: "diorama_dd3d.onnx")) == dd3d)
     #expect(try Data(contentsOf: folder.appending(path: "diorama.json")) == manifest())
     #expect(seen.all.last == 1)
-    #expect(seen.all == seen.all.sorted(), "progress over both graphs only grows")
-    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() == ["diorama.json", "diorama_dd3d.onnx", "diorama_seg.onnx"])
+    #expect(seen.all == seen.all.sorted(), "progress only grows")
+    #expect(net.count(DioramaModels.fileURL("diorama_dd3d.onnx")) == 0)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() == ["diorama.json", "diorama_seg.onnx"])
   }
 
   @Test func aMacFetchesTheCoreMLPackageInsteadOfTheGraph() async throws {
@@ -71,7 +72,7 @@ struct DioramaModelsTests {
     let folder = tmp.url.appending(path: "diorama")
     let net = MockNet(routes(manifest: manifest(segCoreML: "diorama_seg.mlpackage")))
     let plan = try await DioramaModels.plan(coreml: true, session: net.session)
-    #expect(plan.files.map(\.path) == ["diorama_seg.mlpackage/Data/model.mlmodel", "diorama_seg.mlpackage/Data/weights/weight.bin", "diorama_dd3d.onnx"])
+    #expect(plan.files.map(\.path) == ["diorama_seg.mlpackage/Data/model.mlmodel", "diorama_seg.mlpackage/Data/weights/weight.bin"])
     try await DioramaModels.fetch(plan, into: folder, session: net.session)
     #expect(try Data(contentsOf: folder.appending(path: "diorama_seg.mlpackage/Data/model.mlmodel")) == program)
     #expect(try Data(contentsOf: folder.appending(path: "diorama_seg.mlpackage/Data/weights/weight.bin")) == weights)
@@ -86,7 +87,7 @@ struct DioramaModelsTests {
     let net = MockNet(routes())
     try await DioramaModels.fetch(try await DioramaModels.plan(session: net.session), into: folder, session: net.session)
     #expect(net.count(DioramaModels.fileURL("diorama_seg.onnx")) == 0)
-    #expect(net.count(DioramaModels.fileURL("diorama_dd3d.onnx")) == 1)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() == ["diorama.json", "diorama_seg.onnx"])
   }
 
   @Test func aBadGraphLeavesNoManifest() async throws {

@@ -21,9 +21,7 @@ def main(argv: list[str] | None = None) -> int:
   sub = ap.add_subparsers(dest='cmd', required=True)
 
   e = sub.add_parser('export', help="export Diorama's models to ONNX (needs torch and transformers)")
-  e.add_argument('--out', type=Path, required=True, help='folder for diorama_seg.onnx, diorama_dd3d.onnx and diorama.json')
-  e.add_argument('--dd3d-weights', help='DD3D V2-99 KITTI checkpoint (downloaded when omitted)')
-  e.add_argument('--no-dd3d', action='store_true', help='segmentation only: cars face along their lane')
+  e.add_argument('--out', type=Path, required=True, help='folder for diorama_seg.onnx and diorama.json')
   e.add_argument('--coreml', action='store_true', help="also native CoreML packages, which the Mac app runs (needs coremltools)")
 
   r = sub.add_parser('run', help="run a recorded drive through the driving model and Diorama's models")
@@ -58,13 +56,8 @@ def main(argv: list[str] | None = None) -> int:
 
   args = ap.parse_args(argv)
   if args.cmd == 'export':
-    from diorama.export import DD3D_WEIGHTS_URL, export
-    weights = None if args.no_dd3d else args.dd3d_weights
-    if not args.no_dd3d and weights is None:
-      import torch
-      weights = torch.hub.load_state_dict_from_url(DD3D_WEIGHTS_URL, map_location='cpu', progress=True, file_name='dd3d_kitti_v99.pth')
-      weights = str(Path(torch.hub.get_dir()) / 'checkpoints' / 'dd3d_kitti_v99.pth')
-    export(args.out, weights, coreml=args.coreml)
+    from diorama.export import export
+    export(args.out, coreml=args.coreml)
     print(f'wrote {args.out}')
   elif args.cmd == 'run':
     from diorama.offline import run

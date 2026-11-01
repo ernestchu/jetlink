@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkServer
+import Synchronization
 import Testing
 
 @testable import JetlinkDiorama
@@ -18,11 +19,11 @@ func framed(_ data: Data) -> [Data] {
 
 @Suite("Diorama's messages")
 struct DioramaPacketsTests {
-  @Test("Drive, seg and boxes messages are diorama/packets.py's bytes")
+  @Test("Drive and seg messages are diorama/packets.py's bytes")
   func matchesPython() throws {
     let url = try #require(Bundle.module.url(forResource: "packets", withExtension: "bin", subdirectory: "Fixtures"))
     let expected = framed(try Data(contentsOf: url))
-    try #require(expected.count == 3)
+    try #require(expected.count == 2)
 
     // the inputs JetlinkKit/Scripts/make_diorama_fixtures.py writes them from
     let values: [Float] = [0.5, -1.25, 3.0, 1e-3, 250.0]
@@ -31,8 +32,6 @@ struct DioramaPacketsTests {
     for c in 0..<400 { qmap[800 + c] = 3 }
     let label: [Float] = [12, 40, 7, 3, 0]
     let score: [Float] = [0.0, 0.5, 0.9, 1.0, 0.25]
-    var rows = (0..<48).map { Float($0) / 10 }
-    for (r, s) in [Float(0.05), 0.5, 0.1].enumerated() { rows[r * 16 + 6] = s }
 
     #expect(DioramaPackets.drive(frame: 7, seconds: 0.35, modelMs: 3.5, values: values) == expected[0])
     let seg = qmap.withUnsafeBufferPointer { q in
@@ -41,8 +40,6 @@ struct DioramaPacketsTests {
       }
     }
     #expect(seg == expected[1])
-    let boxes = rows.withUnsafeBufferPointer { DioramaPackets.boxes(frame: 8, ms: 12.25, rows: $0) }
-    #expect(boxes == expected[2])
   }
 
   @Test("Half precision of every pixel value is exact")
@@ -63,20 +60,17 @@ struct DioramaPacketsTests {
   }
 }
 
-/// Stands in for a model: the packed frame's size in, outputs of the shapes the exported graphs have.
+/// Stands in for the segmentation: the packed frame's size in, outputs of the shapes the exported graph has.
 final class FakeModel: EngineCore, @unchecked Sendable {
   private(set) var runs = 0
   private(set) var lastFirstPixel: UInt16 = 0
 
-  init(boxes: Bool) throws {
+  init() throws {
     let input = TensorSpec(name: "frame", type: .float16, shape: [1, 6, 128, 256])
-    let outputs: [TensorSpec] =
-      boxes
-      ? [TensorSpec(name: "boxes", type: .float, shape: [100, 16])]
-      : [
-        TensorSpec(name: "qmap", type: .float, shape: [1, 128, 256]), TensorSpec(name: "label", type: .float, shape: [200]),
-        TensorSpec(name: "score", type: .float, shape: [200]),
-      ]
+    let outputs = [
+      TensorSpec(name: "qmap", type: .float, shape: [1, 128, 256]), TensorSpec(name: "label", type: .float, shape: [200]),
+      TensorSpec(name: "score", type: .float, shape: [200]),
+    ]
     try super.init(inputs: ["frame": input], outputs: Dictionary(uniqueKeysWithValues: outputs.map { ($0.name, $0) }))
   }
 
@@ -96,26 +90,51 @@ struct DioramaStageTests {
     sha256: "ab", nbytes: 1, frameSkip: 4, inputShapes: [], outputShapes: [NamedShape("outputs", [1, 20])],
     outputSlices: [NamedSlice("plan", 0..<4), NamedSlice("pose", 4..<6), NamedSlice("hidden_state", 6..<20)], checkpoint: nil)
 
-  func models() throws -> DioramaStage.Models {
+  /// `olderExport`: diorama.json also names DD3D, as exports before it was dropped did, without its graph here.
+  func models(olderExport: Bool = false) throws -> DioramaStage.Models {
     let dir = FileManager.default.temporaryDirectory.appending(path: "diorama-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let meta: [String: Any] = [
+    var meta: [String: Any] = [
       "frame": ["w": 512, "h": 256, "f": 910, "cx": 256, "cy": 47.6],
       "seg": ["file": "diorama_seg.onnx", "labels": ["Road"], "road_class": ["Road": 1], "things": [:], "ds": 2],
-      "dd3d": ["file": "diorama_dd3d.onnx", "classes": ["Car"], "columns": []],
     ]
+    if olderExport { meta["dd3d"] = ["file": "diorama_dd3d.onnx", "classes": ["Car"], "columns": []] }
     try JSONSerialization.data(withJSONObject: meta).write(to: dir.appending(path: "diorama.json"))
-    for graph in ["diorama_seg.onnx", "diorama_dd3d.onnx"] { try Data().write(to: dir.appending(path: graph)) }
+    try Data().write(to: dir.appending(path: "diorama_seg.onnx"))
     return try DioramaStage.Models(folder: dir)
   }
 
-  @Test("A folder without the graphs diorama.json names is refused, naming the one missing")
+  @Test("A folder without the graph diorama.json names is refused, naming it")
   func missingGraph() throws {
     let dir = try models().folder
-    try FileManager.default.removeItem(at: dir.appending(path: "diorama_dd3d.onnx"))
+    try FileManager.default.removeItem(at: dir.appending(path: "diorama_seg.onnx"))
     #expect {
       try DioramaStage.Models(folder: dir)
-    } throws: { "\($0)".contains("diorama_dd3d.onnx, which is not in") }
+    } throws: { "\($0)".contains("diorama_seg.onnx, which is not in") }
+  }
+
+  @Test("An older export that also names DD3D loads, and only the segmentation is built")
+  func olderExport() throws {
+    let built = Mutex<[String]>([])
+    let seg = try FakeModel()
+    let stage = DioramaStage(models: try models(olderExport: true)) { _, name, _ in
+      built.withLock { $0.append(name) }
+      return seg
+    }
+    stage.start()
+    defer { stage.stop() }
+    let w = stage.watch()
+    for f in UInt32(0)..<4 {
+      serve(stage, frame: f)
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    let got = collect(stage, w, 8)
+    #expect(built.withLock { $0 } == ["seg"])
+    #expect(got.contains { $0.first == UInt8(ascii: "S") })
+    // the page is told of the segmentation's classes only
+    let meta = try #require(got.first { $0.first == UInt8(ascii: "M") })
+    let info = try #require(try JSONSerialization.jsonObject(with: meta.dropFirst()) as? [String: Any])
+    #expect(info["seg"] != nil && info["dd3d"] == nil)
   }
 
   func serve(_ stage: DioramaStage, frame: UInt32, pixel: UInt8 = 9, totalUs: UInt32 = 20_000) {
@@ -136,8 +155,8 @@ struct DioramaStageTests {
 
   @Test("Nobody watching: frames are not even copied, and nothing runs")
   func idle() throws {
-    let seg = try FakeModel(boxes: false)
-    let stage = DioramaStage(models: try models()) { _, name, _ in name == "seg" ? seg : try FakeModel(boxes: true) }
+    let seg = try FakeModel()
+    let stage = DioramaStage(models: try models()) { _, _, _ in seg }
     stage.start()
     defer { stage.stop() }
     serve(stage, frame: 0)
@@ -147,8 +166,8 @@ struct DioramaStageTests {
 
   @Test("A watcher hears the meta, every frame's outputs and the segmentation of every other frame")
   func watched() throws {
-    let seg = try FakeModel(boxes: false), boxes = try FakeModel(boxes: true)
-    let stage = DioramaStage(models: try models()) { _, name, _ in name == "seg" ? seg : boxes }
+    let seg = try FakeModel()
+    let stage = DioramaStage(models: try models()) { _, _, _ in seg }
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -176,10 +195,10 @@ struct DioramaStageTests {
 
   @Test("The drive keeps flowing while the models are prepared")
   func preparing() throws {
-    let seg = try FakeModel(boxes: false)
-    let stage = DioramaStage(models: try models()) { _, name, _ in
+    let seg = try FakeModel()
+    let stage = DioramaStage(models: try models()) { _, _, _ in
       Thread.sleep(forTimeInterval: 1)  // a first build
-      return name == "seg" ? seg : try FakeModel(boxes: true)
+      return seg
     }
     stage.start()
     defer { stage.stop() }
@@ -221,7 +240,7 @@ struct DioramaStageTests {
   func input() throws {
     var limits = DioramaStage.Limits()
     limits.backOff = 30
-    let stage = DioramaStage(models: try models(), limits: limits) { _, name, _ in try FakeModel(boxes: name == "dd3d") }
+    let stage = DioramaStage(models: try models(), limits: limits) { _, _, _ in try FakeModel() }
     stage.start()
     defer { stage.stop() }
     let plain = stage.watch(), debug = stage.watch(input: true)
@@ -236,10 +255,10 @@ struct DioramaStageTests {
 
   @Test("A slow driving frame pauses the models")
   func backsOff() throws {
-    let seg = try FakeModel(boxes: false)
+    let seg = try FakeModel()
     var limits = DioramaStage.Limits()
     limits.backOff = 30
-    let stage = DioramaStage(models: try models(), limits: limits) { _, name, _ in name == "seg" ? seg : try FakeModel(boxes: true) }
+    let stage = DioramaStage(models: try models(), limits: limits) { _, _, _ in seg }
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()

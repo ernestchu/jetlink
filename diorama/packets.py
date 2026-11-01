@@ -13,9 +13,8 @@ reads them; docs/diorama.md has the table.
     D  drive   u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs, in meta's order
     S  seg     u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] label (255: dropped),
                u8[queries] score * 255, u32 runs, runs x (u8 query, u8 length - 1): the query map, row by row
-    B  boxes   u32 frame, f32 ms, u16 rows, f32[rows * 16] DD3D rows (export.DD3D_COLUMNS) with score3d >= BOX_MIN_SCORE
 
-`frame` counts the comma's frames (20 a second); a seg or boxes message names
+`frame` counts the comma's frames (20 a second); a seg message names
 the frame its image came from. The milliseconds are how long the driving model
 took for that frame, and the model for that image.
 
@@ -28,8 +27,7 @@ import struct
 
 import numpy as np
 
-META, DRIVE, SEG, BOXES = b'M', b'D', b'S', b'B'
-BOX_MIN_SCORE = 0.1
+META, DRIVE, SEG = b'M', b'D', b'S'
 
 
 def meta(info: dict) -> bytes:
@@ -67,12 +65,6 @@ def seg(frame: int, ms: float, qmap: np.ndarray, label: np.ndarray, score: np.nd
   scores = np.round(np.clip(score, 0, 1) * 255).astype(np.uint8)
   head = struct.pack('<IfHHH', frame, ms, w, h, len(labels))
   return SEG + head + labels.tobytes() + scores.tobytes() + rle(q.astype(np.uint8))
-
-
-def boxes(frame: int, ms: float, rows: np.ndarray) -> bytes:
-  rows = np.asarray(rows, np.float32)
-  rows = rows[rows[:, 6] >= BOX_MIN_SCORE]
-  return BOXES + struct.pack('<IfH', frame, ms, len(rows)) + np.ascontiguousarray(rows, '<f4').tobytes()
 
 
 def write(fh, message: bytes) -> None:

@@ -62,7 +62,8 @@ public enum DioramaModels {
       throw .registry("\(repo)'s \(self.manifest) names no segmentation graph")
     }
     var files: [File] = []
-    for model in ["seg", "dd3d"] {
+    // the segmentation only: an older export's DD3D, still in the repo, is not run
+    for model in ["seg"] {
       guard let entry = meta[model]?.object else { continue }
       guard let name = (coreml ? entry["coreml"]?.string : nil) ?? entry["file"]?.string else { continue }
       // a name in the folder: diorama.json says what to fetch, never where else to write
@@ -70,7 +71,9 @@ public enum DioramaModels {
         throw .registry("\(repo)'s \(self.manifest) names \(name), which is not a name in the folder")
       }
       // the file itself, or every file of the package it is
-      let found = entries.filter { guard let path = $0["path"]?.string else { return false }; return path == name || path.hasPrefix(name + "/") }
+      let found = entries.filter {
+        guard let path = $0["path"]?.string else { return false }; return path == name || path.hasPrefix(name + "/")
+      }
       guard !found.isEmpty else { throw .registry("\(repo) has no \(name)") }
       for item in found {
         let path = item["path"]?.string ?? ""

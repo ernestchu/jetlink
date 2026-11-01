@@ -60,20 +60,16 @@ def calibrate(route: Route, model: DrivingModel, frames: int, passes: int = 2) -
 
 
 class Models:
-  """Diorama's two graphs on onnxruntime, as a server runs them: the packed narrow frame in as float16."""
+  """Diorama's segmentation on onnxruntime, as a server runs it: the packed narrow frame in as float16."""
 
   def __init__(self, folder: Path, device: str):
     import onnxruntime as ort
     self.meta = json.loads((folder / 'diorama.json').read_text())
     prov = providers(device)
     self.seg = ort.InferenceSession(str(folder / self.meta['seg']['file']), providers=prov)
-    self.dd3d = ort.InferenceSession(str(folder / self.meta['dd3d']['file']), providers=prov) if self.meta.get('dd3d') else None
 
   def segment(self, narrow: np.ndarray):
     return self.seg.run(None, {'frame': narrow[None].astype(np.float16)})
-
-  def boxes(self, narrow: np.ndarray):
-    return self.dd3d.run(None, {'frame': narrow[None].astype(np.float16)})[0]
 
 
 def drive_meta(model: DrivingModel, models: Models, height: float, rpy, route: Route, start: int) -> dict:
@@ -82,7 +78,6 @@ def drive_meta(model: DrivingModel, models: Models, height: float, rpy, route: R
     'version': 1, 'fps': FPS, 'frame': m['frame'], 'height': height, 'live': False,
     'drive': [[name, model.slices[name].stop - model.slices[name].start] for name in DRIVE_FIELDS if name in model.slices],
     'seg': {k: m['seg'][k] for k in ('labels', 'road_class', 'things', 'ds')},
-    'dd3d': {k: m['dd3d'][k] for k in ('classes', 'columns')} if m.get('dd3d') else None,
     'source': {'route': route.segments[0].name.rsplit('--', 1)[0], 'start': start, 'rpy': list(map(float, rpy)),
                'camera': list(route.size)},
   }
@@ -97,7 +92,7 @@ def footage_encoder(path: Path, size: tuple[int, int], width: int = 960) -> subp
 
 
 def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: float = 0.0, seconds: float | None = None,
-        device: str = 'auto', rpy: list[float] | None = None, calib_s: float = 60.0, seg_every: int = 2, dd3d_every: int = 4,
+        device: str = 'auto', rpy: list[float] | None = None, calib_s: float = 60.0, seg_every: int = 2,
         rhd: bool = False) -> Path:
   route = Route.open(paths)
   print(f'{len(route.segments)} segments of {route.segments[0].name.rsplit("--", 1)[0]}, camera {route.size[0]}x{route.size[1]}')
@@ -114,7 +109,7 @@ def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: floa
   out.mkdir(parents=True, exist_ok=True)
   enc = footage_encoder(out / 'footage.mp4', route.size)
   model.reset()
-  timing = {'driving': 0.0, 'seg': 0.0, 'dd3d': 0.0}
+  timing = {'driving': 0.0, 'seg': 0.0}
   n = 0
   t0 = time.perf_counter()
   with open(out / 'drive.diorama', 'wb') as fh:
@@ -136,12 +131,6 @@ def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: floa
         seg_s = time.perf_counter() - t
         timing['seg'] += seg_s
         packets.write(fh, packets.seg(frame, 1000 * seg_s, qmap, label, score))
-      if models.dd3d is not None and dd3d_every and frame % dd3d_every == 0:
-        t = time.perf_counter()
-        rows = models.boxes(warped[0])
-        dd3d_s = time.perf_counter() - t
-        timing['dd3d'] += dd3d_s
-        packets.write(fh, packets.boxes(frame, 1000 * dd3d_s, rows))
       n += 1
       if n % 200 == 0:
         print(f'{n / FPS:.0f} s of drive in {time.perf_counter() - t0:.0f} s', flush=True)
@@ -150,6 +139,6 @@ def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: floa
   if not n:
     raise SystemExit(f'the drive has no frames from {start_s} s on')
   print(f'{n} frames ({n / FPS:.1f} s): driving model {1000 * timing["driving"] / n:.1f} ms a frame, '
-        f'seg {1000 * timing["seg"] / max(n // seg_every, 1):.1f} ms, dd3d {1000 * timing["dd3d"] / max(n // max(dd3d_every, 1), 1):.1f} ms')
+        f'seg {1000 * timing["seg"] / max(n // seg_every, 1):.1f} ms')
   print(f'wrote {out}/drive.diorama and footage.mp4; play it with: python -m diorama view {out}')
   return out
