@@ -313,7 +313,7 @@ percentile, 22 ms at most when it re-cuts crosswalk stripes).
 - **Flicker:** frame by frame, the lead can blink on and off where the model's
   distance and the segmentation's only just agree, as with a far car whose
   ground contact the segmentation places a few metres off.
-- **One kind of vehicle:** the lead is always drawn as the same sedan, whatever
+- **One kind of vehicle:** the lead is always drawn as the same car, whatever
   it is.
 - **Lane colour:** all lane lines are drawn white.
 

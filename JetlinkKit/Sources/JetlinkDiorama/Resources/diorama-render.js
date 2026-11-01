@@ -24,6 +24,9 @@
     },
   };
 
+  // the car's paint (diorama-assets.bin marks it): the lead's under its tint, and the ego car's
+  const LEAD_PAINT = [0.62, 0.62, 0.64], EGO_PAINT = [0.66, 0.66, 0.68];
+
   const COMMON = `
 uniform vec3 cam; uniform vec3 horizon; uniform vec2 fog;
 vec3 apply_fog(vec3 c, vec3 w) {
@@ -87,18 +90,19 @@ void main() { vw = (model * vec4(pos, 1.0)).xyz; vn = nmat * nrm; vc = col; ve =
 precision highp float;
 ${COMMON}
 uniform vec3 light_dir; uniform vec3 amb_sky; uniform vec3 amb_ground; uniform vec3 key; uniform vec3 rim_col;
-uniform vec3 tint; uniform float tint_amt; uniform float spec_amt; uniform float brake;
+uniform vec3 tint; uniform float tint_amt; uniform float spec_amt; uniform float brake; uniform vec3 paint;
 in vec3 vw; in vec3 vn; in vec3 vc; in float ve; out vec4 frag;
 void main() {
   vec3 N = normalize(vn), V = normalize(cam - vw);
   if (dot(N, V) < 0.0) N = -N;
-  vec3 base = mix(vc, vc * 0.35 + tint * 0.75, tint_amt);
+  vec3 col = ve < 0.0 ? paint : vc;  // emission -1 marks the paint, coloured per car
+  vec3 base = mix(col, col * 0.35 + tint * 0.75, tint_amt);
   vec3 amb = mix(amb_ground, amb_sky, 0.5 + 0.5 * dot(N, vec3(0.0, 0.0, -1.0)));
   float diff = clamp((dot(N, -light_dir) + 0.25) / 1.25, 0.0, 1.0);
   float spec = pow(max(dot(N, normalize(-light_dir + V)), 0.0), 48.0) * spec_amt;
   float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
   vec3 c = base * (amb + diff * key) + spec + rim * rim_col * 0.6;
-  if (ve > 0.0) c += vc * ve * (0.6 + 2.5 * brake);
+  if (ve > 0.0) c += col * ve * (0.6 + 2.5 * brake);
   frag = vec4(apply_fog(c, vw), 1.0);
 }`],
   };
@@ -394,12 +398,12 @@ void main() {
       if (lines.length) this.drawDynamic(m, lines, [['pos', 2]]);
     }
 
-    // only the lead, from this frame's prediction, as the one sedan: its rear at the model's distance, facing along its lane
+    // only the lead, from this frame's prediction, as the one car: its rear at the model's distance, facing along its lane
     objects(state) {
-      const l = state.lead, a = this.assets.sedan;
+      const l = state.lead, a = this.assets.car;
       if (!l || !a) return [];
       const [L, W] = a.dims;
-      return [{ type: 'sedan', x: l.x + 0.5 * L * Math.cos(l.heading), y: l.y + 0.5 * L * Math.sin(l.heading), heading: l.heading, L, W, braking: l.braking }];
+      return [{ type: 'car', x: l.x + 0.5 * L * Math.cos(l.heading), y: l.y + 0.5 * L * Math.sin(l.heading), heading: l.heading, L, W, braking: l.braking }];
     }
 
     drawDecals(state, objs, hgt, common) {
@@ -475,7 +479,7 @@ void main() {
       gl.uniform3fv(mp.u.light_dir, this.lightDir);
       gl.uniform3fv(mp.u.amb_sky, th.amb_sky); gl.uniform3fv(mp.u.amb_ground, th.amb_ground);
       gl.uniform3fv(mp.u.key, th.key); gl.uniform3fv(mp.u.rim_col, th.rim);
-      const draw = (name, x, y, heading, tint, tintAmt, spec, brake) => {
+      const draw = (name, x, y, heading, paint, tint, tintAmt, spec, brake) => {
         const a = this.assets[name];
         const c = Math.cos(heading), s = Math.sin(heading);
         // local (x forward, y right, z up) -> road (z down)
@@ -484,13 +488,14 @@ void main() {
         gl.uniformMatrix4fv(mp.u.model, false, gl4(model));
         // the normal matrix, (M^-1)^T for the rotation-and-flip part, column-major
         gl.uniformMatrix3fv(mp.u.nmat, false, new Float32Array([c, s, 0, -s, c, 0, 0, 0, -1]));
+        gl.uniform3fv(mp.u.paint, paint);
         gl.uniform3fv(mp.u.tint, tint || [0, 0, 0]);
         gl.uniform1f(mp.u.tint_amt, tintAmt); gl.uniform1f(mp.u.spec_amt, spec); gl.uniform1f(mp.u.brake, brake);
         gl.bindVertexArray(a.vao);
         gl.drawElements(gl.TRIANGLES, a.count, gl.UNSIGNED_SHORT, 0);
       };
-      for (const o of objs) draw(o.type, o.x, o.y, o.heading, th.path, 0.55, 0.06, o.braking ? 1 : 0);
-      draw('ego', (EGO_FRONT + EGO_REAR) / 2, 0, 0, null, 0, 0.35, 0);
+      for (const o of objs) draw(o.type, o.x, o.y, o.heading, LEAD_PAINT, th.path, 0.55, 0.06, o.braking ? 1 : 0);
+      draw('car', (EGO_FRONT + EGO_REAR) / 2, 0, 0, EGO_PAINT, null, 0, 0.35, 0);
       gl.bindVertexArray(null);
     }
   }
