@@ -10,9 +10,10 @@
   /// The Mac advertises `serviceType` over Bonjour, and peer to peer (AWDL)
   /// as well as on any network the two share; the iPhone browses for it. What
   /// crosses is the stage's messages, not video: each after its u32
-  /// little-endian length, exactly as a drive.diorama holds them, 10–100 KB a
-  /// second. The viewer sends the same framing back with what its page posts
-  /// (`hello:` and its name, `ready`, `input:on`, `input:off`), and each
+  /// little-endian length, exactly as a drive.diorama holds them, about 180 KB
+  /// a second (1.8 MB with Model input). The viewer sends the same framing
+  /// back with what its page posts (`hello:` and its name, `ready`,
+  /// `input:on`, `input:off`), and each
   /// viewer gets a watcher of its own from `ready` on.
   ///
   /// Neither end queues more than it can hand on: the viewer reads again
