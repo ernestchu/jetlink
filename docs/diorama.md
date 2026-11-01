@@ -222,6 +222,12 @@ its Wi-Fi joined to the car, with no internet and no Mac on it, and still
 finds the Mac this way. Both need Wi-Fi turned on, and the iPhone asks once
 for Local Network access.
 
+Checked on an iPhone 15 Pro watching an M5 Pro Mac, with the iPhone's Wi-Fi
+on but joined to no network: it found the Mac over AWDL and drew the drive
+smoothly, with the Mac's send queue empty. An iPhone on a USB cable to the
+Mac (for Xcode) connects over the cable's network instead, so test AWDL with
+the cable out. Wireless CarPlay sharing the radio has not been tried yet.
+
 - **The design:**
   - The Mac's app runs an `NWListener` that advertises
     `_jetlink-diorama._tcp` over Bonjour, with `includePeerToPeer`, so it is
