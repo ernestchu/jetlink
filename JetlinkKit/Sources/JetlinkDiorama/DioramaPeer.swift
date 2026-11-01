@@ -160,7 +160,9 @@
     private func accept(_ connection: NWConnection) {
       nextID += 1
       let id = nextID
-      let link = Link(id: id, connection: connection, stage: stage, queue: queue) { [weak self] in self?.changed() } ended: { [weak self] in
+      let link = Link(id: id, connection: connection, stage: stage, queue: queue) { [weak self] in
+        self?.changed()
+      } ended: { [weak self] in
         guard let self else { return }
         self.links[id] = nil
         self.changed()
@@ -459,6 +461,11 @@
       }
       self.found = found
       onState?(state, found.keys.sorted())
+      // a Mac that went away before its connection came up never fails it: let it go
+      if let connection, let name = connectedTo, found[name] == nil, case .connecting = state {
+        dropped(connection)
+        return
+      }
       connectIfIdle()
     }
 
@@ -487,7 +494,14 @@
       }
       connection.start(queue: queue)
       receive(connection, reader: DioramaPeer.Reader(limit: DioramaPeer.maxMessage))
+      // nor does one resolving a service that is gone: give it a few seconds
+      queue.asyncAfter(deadline: .now() + DioramaWatch.connectTimeout) { [weak self, weak connection] in
+        guard let self, let connection, self.connection === connection, case .connecting = self.state else { return }
+        self.dropped(connection)
+      }
     }
+
+    static let connectTimeout: TimeInterval = 5
 
     private func receive(_ connection: NWConnection, reader: DioramaPeer.Reader) {
       connection.receive(minimumIncompleteLength: 1, maximumLength: 256 << 10) { [weak self] data, _, done, error in

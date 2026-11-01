@@ -69,7 +69,7 @@ private struct DioramaFromMac: View {
   var body: some View {
     DioramaWebView(feed: app.dioramaRemote)
       .ignoresSafeArea(edges: .horizontal)
-      .overlay(alignment: .bottom) {
+      .overlay(alignment: .top) {
         if let note {
           Label(note.text, systemImage: note.symbol)
             .font(.footnote)
@@ -77,7 +77,7 @@ private struct DioramaFromMac: View {
             .padding(.vertical, 10)
             .glassEffect(.regular, in: .capsule)
             .padding(.horizontal, 16)
-            .padding(.bottom, 12)
+            .padding(.top, 12)
             .multilineTextAlignment(.leading)
         }
       }
