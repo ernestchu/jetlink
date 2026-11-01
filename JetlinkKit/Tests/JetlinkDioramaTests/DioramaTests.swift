@@ -145,12 +145,17 @@ struct DioramaStageTests {
     }
   }
 
-  /// Messages until `count` have come or a second has passed.
-  func collect(_ stage: DioramaStage, _ w: DioramaStage.Watcher, _ count: Int) -> [Data] {
+  /// Messages until `count` have come, or `done` says so, or two seconds have passed.
+  func collect(_ stage: DioramaStage, _ w: DioramaStage.Watcher, _ count: Int = .max, until done: ([Data]) -> Bool = { _ in false }) -> [Data] {
     var got: [Data] = []
     let deadline = Date(timeIntervalSinceNow: 2)
-    while got.count < count && Date() < deadline, let more = stage.next(w, timeout: 0.1) { got += more }
+    while got.count < count && !done(got) && Date() < deadline, let more = stage.next(w, timeout: 0.1) { got += more }
     return got
+  }
+
+  /// The status messages among `got`, as text.
+  func statuses(_ got: [Data]) -> [String] {
+    got.filter { $0.first == UInt8(ascii: "T") }.map { String(decoding: $0.dropFirst(), as: UTF8.self) }
   }
 
   @Test("Nobody watching: frames are not even copied, and nothing runs")
@@ -220,14 +225,17 @@ struct DioramaStageTests {
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
-    serve(stage, frame: 0)
-    Thread.sleep(forTimeInterval: 0.2)
-    serve(stage, frame: 2, totalUs: 55_000)
-    serve(stage, frame: 4)
-    let got = collect(stage, w, 8)
-    let statuses = got.filter { $0.first == UInt8(ascii: "T") }.map { String(decoding: $0.dropFirst(), as: UTF8.self) }
-    #expect(statuses.first == "idle")
-    #expect(statuses.last == "off: File doesn't exist")
+    // apart, since a frame the stage's thread is taking the last one's from is
+    // skipped, as a comma's would be
+    for (f, us) in [(UInt32(0), UInt32(20_000)), (2, 55_000), (4, 20_000)] {
+      serve(stage, frame: f, totalUs: us)
+      Thread.sleep(forTimeInterval: f == 0 ? 0.2 : 0.05)
+    }
+    let got = collect(stage, w) { got in
+      got.filter { $0.first == UInt8(ascii: "D") }.count == 3 && statuses(got).last == "off: File doesn't exist"
+    }
+    #expect(statuses(got).first == "idle")
+    #expect(statuses(got).last == "off: File doesn't exist")
     #expect(stage.state == "off: File doesn't exist")
     #expect(got.filter { $0.first == UInt8(ascii: "D") }.count == 3)
     // a page that opens later hears it straight away
@@ -244,8 +252,9 @@ struct DioramaStageTests {
     stage.start()
     defer { stage.stop() }
     let plain = stage.watch(), debug = stage.watch(input: true)
+    Thread.sleep(forTimeInterval: 0.05)  // past the wake a new watcher gives the stage's thread, which would skip the frame
     serve(stage, frame: 0, pixel: 77, totalUs: 55_000)  // slow: the models pause, the view still sees the frame
-    let shown = collect(stage, debug, 4).filter { $0.first == UInt8(ascii: "I") }
+    let shown = collect(stage, debug) { $0.contains { $0.first == UInt8(ascii: "I") } }.filter { $0.first == UInt8(ascii: "I") }
     let message = try #require(shown.first)
     #expect(message.count == 10 + 6 * 128 * 256)
     #expect(Array(message[1..<10]) == [0, 0, 0, 0, 0, 1, 128, 0, 6])  // frame 0, 256 by 128, 6 planes
