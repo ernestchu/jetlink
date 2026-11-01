@@ -58,8 +58,13 @@
   public struct DioramaWebView: PlatformViewRepresentable {
     public static let scheme = "jetlink-diorama"
     let feed: any DioramaFeed
+    /// The page's Model input toggle: off for a feed that never carries the frames.
+    let modelInput: Bool
 
-    public init(feed: any DioramaFeed) { self.feed = feed }
+    public init(feed: any DioramaFeed, modelInput: Bool = true) {
+      self.feed = feed
+      self.modelInput = modelInput
+    }
 
     public func makeCoordinator() -> Coordinator { Coordinator(feed: feed) }
 
@@ -93,7 +98,8 @@
       #endif
       view.navigationDelegate = context.coordinator
       context.coordinator.webView = view
-      view.load(URLRequest(url: URL(string: "\(DioramaWebView.scheme)://page/diorama.html?bridge=1")!))
+      let query = modelInput ? "bridge=1" : "bridge=1&noinput=1"
+      view.load(URLRequest(url: URL(string: "\(DioramaWebView.scheme)://page/diorama.html?\(query)")!))
       return view
     }
 

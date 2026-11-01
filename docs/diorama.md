@@ -235,14 +235,17 @@ for Local Network access.
     as the Mac's own view does; the models run while any watcher is there. A
     new stage, when the Mac's server restarts, keeps viewers connected and
     starts them over from its meta.
-- **What crosses:** the [messages](#messages), not video, each after its u32
-  little-endian length exactly as a `drive.diorama` holds them. A replayed
-  drive measured about 180 KB/s (20 drive messages and 10 segmentations a
-  second), well within what AWDL carries beside CarPlay. **Model input** on
-  the iPhone adds the frames the model sees, about 1.8 MB/s.
+- **What crosses:** only the [messages](#messages) the page draws with: `M`
+  meta, `D` drive and `S` seg, each after its u32 little-endian length
+  exactly as a `drive.diorama` holds them. A replayed drive measured about
+  180 KB/s (20 drive messages and 10 segmentations a second), well within
+  what AWDL carries beside CarPlay.
+- **What never leaves the Mac:** `I`, the camera frames the model sees, and
+  `T`, what the model is doing. The iPhone's page has no **Model input**
+  toggle when it watches a Mac, and the Mac refuses the frames to a viewer
+  that asks for them anyway.
 - **Back the other way:** what the page posts, in the same framing: `hello:`
-  and the iPhone's name, then `ready`, `input:on` or `input:off`, sent again
-  on each new connection.
+  and the iPhone's name, then `ready`, sent again on each new connection.
 - **A slow iPhone:** neither end queues more than it can hand on. The iPhone
   reads again only once its page has taken the last batch, and the Mac sends
   again only once the last send has left. A viewer that falls behind backs up
@@ -250,9 +253,8 @@ for Local Network access.
   again from a fresh meta, which the page starts over from.
 - **Who can watch:** any iPhone nearby running Jetlink, while the Mac's
   setting is on. It is off by default, and the Mac's toolbar lists who is
-  watching. The messages are the drawing's inputs (the road, the lead, the
-  driving model's outputs), not the camera, unless a viewer turns on **Model
-  input**.
+  watching. What it sees is the drawing's inputs (the driving model's
+  outputs and the segmentation), never the camera.
 
 ### On the iPhone itself
 
@@ -321,8 +323,8 @@ follows its u32 length; on the event stream, each is one base64 `data:` line.
 | `M` meta | JSON: the frame's camera, the drive fields and their float counts, the segmentation's classes |
 | `D` drive | u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs |
 | `S` seg | u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] class (255 dropped), u8[queries] score × 255, u32 runs, then (u8 query, u8 length − 1) per run |
-| `T` status | UTF-8: what the segmentation is doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only: the page shows it beside the timings when it is not running |
-| `I` input | u32 frame, u16 width, u16 height, u8 planes, then the packed narrow frame the models see (four Y planes, U, V). Live only, and only to a page that asks: the web page's **Model input** toggle on `/diorama/events/frames`, or the Mac view's or iPhone tab's |
+| `T` status | UTF-8: what the segmentation is doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only, and not to an iPhone watching a Mac: the page shows it beside the timings when it is not running |
+| `I` input | u32 frame, u16 width, u16 height, u8 planes, then the packed narrow frame the models see (four Y planes, U, V). Live only, and only to a page that asks: the web page's **Model input** toggle on `/diorama/events/frames`, or the Mac view's, or the iPhone tab's on its own server. Never to an iPhone watching a Mac |
 
 `diorama/packets.py` writes them and diorama-engine.js reads them.
 `DioramaPackets.swift` matches the Python byte for byte, which

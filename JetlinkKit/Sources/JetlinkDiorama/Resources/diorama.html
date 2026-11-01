@@ -10,6 +10,7 @@
     live    served by jetlink-server at /diorama/, fed by /diorama/events
     drive   ?drive=drive.diorama&footage=footage.mp4: a recorded drive (python -m diorama view) beside its footage
     bridge  ?bridge=1: the Mac app pushes the messages itself (Diorama.push)
+    noinput ?noinput=1: no Model input toggle, as on an iPhone watching a Mac, which is never sent the frames
 -->
 <html lang="en">
 <head>
@@ -363,7 +364,8 @@
     window.Diorama = { push: (s) => take(b64(s)), pushAll: (list) => list.forEach((s) => take(b64(s))), reset: () => engine.reset() };
     wait('Waiting for the comma…');
     const post = (m) => { try { window.webkit.messageHandlers.diorama.postMessage(m); } catch (e) { /* not in the app */ } };
-    post(inputToggle((on) => post(on ? 'input:on' : 'input:off')) ? 'input:on' : 'ready');
+    if (params.get('noinput')) post('ready');
+    else post(inputToggle((on) => post(on ? 'input:on' : 'input:off')) ? 'input:on' : 'ready');
     return { tick() { wait(performance.now() - lastData < 2000 ? '' : 'Waiting for the comma…'); } };
   }
 
