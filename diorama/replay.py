@@ -38,11 +38,12 @@ def packed_scalars(spec, rhd: bool = False) -> np.ndarray:
 
 
 def replay(paths: list[Path], onnx: str, host: str, port: int, start_s: float = 0.0, seconds: float | None = None,
-           rpy: list[float] | None = None, rhd: bool = False, loop: bool = False) -> None:
-  route = Route.open(paths)
-  rpy = np.asarray(rpy if rpy is not None else (0.0, 0.0, 0.0), float)  # the camera as given, else as mounted
+           rhd: bool = False, loop: bool = False) -> None:
+  route = Route.open(paths)  # with the calibration the comma logged, or refused
   client = JetlinkClient.open_tcp(host, port)
-  hello = client.hello()
+  # what a comma's hello says of its cameras, from its own calibration
+  cal = route.calibration
+  hello = client.hello(camera={'wide_from_device_euler': list(cal.wide_from_device), 'height': cal.height})
   print(f"server: {hello.get('backend')} {hello.get('runtime_version')} on {hello.get('device')}")
   sha256, nbytes = sha256_file(onnx)
   spec = client.ensure_engine(sha256, nbytes, onnx_path=onnx, progress=lambda s, f, m: print(f'  {s:<7} {f * 100:5.1f}%  {m}'))
@@ -53,7 +54,7 @@ def replay(paths: list[Path], onnx: str, host: str, port: int, start_s: float = 
   try:
     while True:
       next_t = time.perf_counter()
-      for i, (_k, _f, warped) in enumerate(route.warped(rpy, start, count)):
+      for i, (_k, _f, warped) in enumerate(route.warped(start, count)):
         now = time.perf_counter()
         if next_t > now:
           time.sleep(next_t - now)

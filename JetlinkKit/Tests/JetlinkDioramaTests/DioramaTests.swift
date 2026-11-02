@@ -61,6 +61,11 @@ struct DioramaPacketsTests {
 }
 
 /// Stands in for the segmentation: the packed frame's size in, outputs of the shapes the exported graph has.
+extension CameraCalibration {
+  /// A comma 4's, about: its wide camera a little down and to the left of the device, 1.37 m up.
+  static let test = CameraCalibration(wideFromDevice: [0, 0.02, -0.016], height: 1.37)
+}
+
 final class FakeModel: EngineCore, @unchecked Sendable {
   private(set) var runs = 0
   private(set) var lastFirstPixel: UInt16 = 0
@@ -121,6 +126,7 @@ struct DioramaStageTests {
       built.withLock { $0.append(name) }
       return seg
     }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -141,7 +147,7 @@ struct DioramaStageTests {
     let narrow = [UInt8](repeating: pixel, count: 6 * 128 * 256)
     let outputs = (0..<20).map(Float.init)
     narrow.withUnsafeBytes { n in
-      outputs.withUnsafeBufferPointer { o in stage.frameServed(frameID: frame, narrow: n, outputs: o, spec: spec, totalUs: totalUs) }
+      outputs.withUnsafeBufferPointer { o in stage.frameServed(frameID: frame, narrow: n, wide: n, outputs: o, spec: spec, totalUs: totalUs) }
     }
   }
 
@@ -158,10 +164,54 @@ struct DioramaStageTests {
     got.filter { $0.first == UInt8(ascii: "T") }.map { String(decoding: $0.dropFirst(), as: UTF8.self) }
   }
 
+  @Test("Without the comma's camera calibration nothing runs, and the status says why; with it, the meta carries it")
+  func uncalibrated() throws {
+    let seg = try FakeModel()
+    let stage = DioramaStage(models: try models()) { _, _, _ in seg }
+    stage.start()
+    defer { stage.stop() }
+    let w = stage.watch()
+    for f in UInt32(0)..<4 { serve(stage, frame: f) }
+    Thread.sleep(forTimeInterval: 0.2)
+    let got = collect(stage, w, 3)
+    #expect(seg.runs == 0 && !got.contains { $0.first == UInt8(ascii: "D") })
+    #expect(statuses(got).contains(DioramaStage.uncalibrated))
+    stage.cameraCalibrated(.test)
+    for f in UInt32(4)..<8 {
+      serve(stage, frame: f)
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    let after = collect(stage, w, 6)
+    let meta = try #require(after.first { $0.first == UInt8(ascii: "M") })
+    let info = try #require(try JSONSerialization.jsonObject(with: meta.dropFirst()) as? [String: Any])
+    #expect((info["height"] as? NSNumber)?.doubleValue == CameraCalibration.test.height)
+    let wide = try #require(info["wide"] as? [String: Any])
+    #expect((wide["from_device"] as? [Any])?.compactMap { ($0 as? NSNumber)?.doubleValue } == CameraCalibration.test.wideFromDevice)
+    #expect((wide["f"] as? NSNumber)?.doubleValue == 455)
+    #expect(after.contains { $0.first == UInt8(ascii: "D") })
+  }
+
+  @Test("A new session's frames, counting from 0 again, are segmented as the last session's were")
+  func newSession() throws {
+    let seg = try FakeModel()
+    let stage = DioramaStage(models: try models()) { _, _, _ in seg }
+    stage.cameraCalibrated(.test)
+    stage.start()
+    defer { stage.stop() }
+    let w = stage.watch()
+    for f: UInt32 in [600, 602, 604, 606, 0, 2, 4, 6] {
+      serve(stage, frame: f)
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+    let segs = collect(stage, w).filter { $0.first == UInt8(ascii: "S") }.map { $0[1..<5].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) } }
+    #expect(segs.contains { $0 >= 600 } && segs.contains { $0 < 600 })
+  }
+
   @Test("Nobody watching: frames are not even copied, and nothing runs")
   func idle() throws {
     let seg = try FakeModel()
     let stage = DioramaStage(models: try models()) { _, _, _ in seg }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     serve(stage, frame: 0)
@@ -173,6 +223,7 @@ struct DioramaStageTests {
   func watched() throws {
     let seg = try FakeModel()
     let stage = DioramaStage(models: try models()) { _, _, _ in seg }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -205,6 +256,7 @@ struct DioramaStageTests {
       Thread.sleep(forTimeInterval: 1)  // a first build
       return seg
     }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -222,6 +274,7 @@ struct DioramaStageTests {
   func offSaysWhy() throws {
     struct Missing: Error, CustomStringConvertible { var description: String { "File doesn't exist" } }
     let stage = DioramaStage(models: try models()) { _, _, _ in throw Missing() }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -249,6 +302,7 @@ struct DioramaStageTests {
     var limits = DioramaStage.Limits()
     limits.backOff = 30
     let stage = DioramaStage(models: try models(), limits: limits) { _, _, _ in try FakeModel() }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let plain = stage.watch(), debug = stage.watch(input: true)
@@ -268,6 +322,7 @@ struct DioramaStageTests {
     var limits = DioramaStage.Limits()
     limits.backOff = 30
     let stage = DioramaStage(models: try models(), limits: limits) { _, _, _ in seg }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -287,6 +342,7 @@ struct DioramaStageTests {
       built.withLock { $0 += 1 }
       return try SlowModel(seconds: 0.08, running: running)
     }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()
@@ -313,6 +369,7 @@ struct DioramaStageTests {
       built.withLock { $0 += 1 }
       return try SlowModel(seconds: 0.08, running: running)
     }
+    stage.cameraCalibrated(.test)
     stage.start()
     defer { stage.stop() }
     let w = stage.watch()

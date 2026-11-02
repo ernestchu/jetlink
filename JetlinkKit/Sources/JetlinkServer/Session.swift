@@ -254,6 +254,7 @@ final class Session: @unchecked Sendable {
     host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     host.lock.unlock()
     log.info("hello from \(self.who) (seq \(message.seq))")
+    host.frameObserver?.cameraCalibrated(CameraCalibration(hello: hello?["camera"]))
     return hello
   }
 
@@ -413,8 +414,9 @@ final class Session: @unchecked Sendable {
     if reply.status == .ok, let observer = host.frameObserver {
       // after the reply: whatever watches the drive never delays the comma
       let narrow = UnsafeRawBufferPointer(start: message.payload.baseAddress! + Wire.inferReqSize, count: spec.warpedBytes / 2)
+      let wide = UnsafeRawBufferPointer(start: narrow.baseAddress! + narrow.count, count: spec.warpedBytes / 2)
       observer.frameServed(
-        frameID: reply.frameID, narrow: narrow, outputs: UnsafeBufferPointer(start: outputBuffer, count: reply.outputCount),
+        frameID: reply.frameID, narrow: narrow, wide: wide, outputs: UnsafeBufferPointer(start: outputBuffer, count: reply.outputCount),
         spec: spec, totalUs: reply.totalUs)
     }
   }

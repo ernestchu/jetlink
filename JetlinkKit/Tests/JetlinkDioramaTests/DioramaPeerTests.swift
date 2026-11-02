@@ -45,6 +45,7 @@
       init() throws {
         let seg = try FakeModel()
         stage = DioramaStage(models: try helper.models()) { _, _, _ in seg }
+        stage.cameraCalibrated(.test)
         stage.start()
         broadcaster.onChange = { [weak self] list in self?.viewers.withLock { $0 = list } }
         try broadcaster.start()
@@ -122,6 +123,7 @@
       rig.got.withLock { $0.removeAll() }
       let seg = try FakeModel()
       let next = DioramaStage(models: try rig.helper.models()) { _, _, _ in seg }
+      next.cameraCalibrated(.test)
       next.start()
       defer { next.stop() }
       rig.broadcaster.setStage(next)

@@ -63,6 +63,13 @@
     return Float64Array.from([co[0], -(b * i - c * h), b * f - c * e, co[1], a * i - c * g, -(a * f - c * d), co[2], -(a * h - b * g), a * e - b * d]).map((x) => x / det);
   }
   const VIEW_FROM_DEVICE = Float64Array.from([0, 1, 0, 0, 0, 1, 1, 0, 0]);
+  // the comma's calibration of the wide camera from a meta's wide frame, [roll, pitch, yaw], or null
+  const wideFromDevice = (wide) => (Array.isArray(wide.from_device) && wide.from_device.length === 3 ? wide.from_device : null);
+  // openpilot's rot_from_euler: roll about x, then pitch about y, then yaw about z
+  function rotFromEuler(r, p, y) {
+    const cr = Math.cos(r), sr = Math.sin(r), cp = Math.cos(p), sp = Math.sin(p), cy = Math.cos(y), sy = Math.sin(y);
+    return m3mul(Float64Array.from([cy, -sy, 0, sy, cy, 0, 0, 0, 1]), m3mul(Float64Array.from([cp, 0, sp, 0, 1, 0, -sp, 0, cp]), Float64Array.from([1, 0, 0, 0, cr, -sr, 0, sr, cr])));
+  }
 
   // ---------------------------------------------------------------- messages
   function decode(buf) {
@@ -81,7 +88,7 @@
       for (let i = 0; i < n; i++) values[i] = dv.getFloat32(13 + 4 * i, true);
       return { kind, frame: dv.getUint32(1, true), seconds: dv.getFloat32(5, true), ms: dv.getFloat32(9, true), values };
     }
-    if (kind === 'S') {
+    if (kind === 'S' || kind === 'W') {  // W: of the wide frame (meta's wide), the same otherwise
       const frame = dv.getUint32(1, true), ms = dv.getFloat32(5, true);
       const w = dv.getUint16(9, true), h = dv.getUint16(11, true), nq = dv.getUint16(13, true);
       let at = 15;
@@ -95,7 +102,7 @@
         qmap.fill(v, p, p + len);
         p += len;
       }
-      return { kind, frame, ms, w, h, label, score, qmap };
+      return { kind: 'S', wide: kind === 'W', frame, ms, w, h, label, score, qmap };
     }
     return { kind };
   }
@@ -183,14 +190,16 @@
   }
 
   // ---------------------------------------------------------------- the camera that saw the frame
-  // The driving model's narrow frame is already calibrated: road point -> pixel is K view_from_device.
+  // The driving model's frames are already calibrated: road point -> pixel is K view_from_device, K the narrow
+  // frame's (meta.frame) or the wide's (meta.wide). The comma warps the wide camera with the narrow one's
+  // calibration, so the wide frame is turned by the wide camera's angles from the device too (rotation, the model's
+  // wide_from_device_euler).
   class FrameCamera {
-    constructor(meta) {
-      const f = meta.frame;
+    constructor(meta, f = meta.frame, rotation = null) {
       this.w = f.w; this.h = f.h; this.f = f.f;
-      this.height = meta.height || 1.22;
+      this.height = meta.height;
       const K = Float64Array.from([f.f, 0, f.cx, 0, f.f, f.cy, 0, 0, 1]);
-      this.P = m3mul(K, VIEW_FROM_DEVICE);
+      this.P = m3mul(K, rotation ? m3mul(VIEW_FROM_DEVICE, rotation) : VIEW_FROM_DEVICE);
       this.Pinv = m3inv(this.P);
     }
     project(x, y, z) {
@@ -243,7 +252,7 @@
     }
     const n = msg.w * msg.h, cls = new Uint8Array(n);
     for (let i = 0; i < n; i++) cls[i] = msg.qmap[i] === 255 ? 0 : qClass[msg.qmap[i]];
-    return { w: msg.w, h: msg.h, ds: seg.ds, cls, qmap: msg.qmap, qThing };
+    return { w: msg.w, h: msg.h, ds: seg.ds, wide: !!msg.wide, cls, qmap: msg.qmap, qThing };
   }
 
   // Does the segmentation have a vehicle where the model puts the lead? The rear of the lead, (x, y) on the road at
@@ -320,11 +329,14 @@
       this.origin = [this.origin[0] + dr * this.RES, this.origin[1] + dc * this.RES];
       this.dirty = 'all';
     }
-    observe(p, seg, zpath) {
+    // seg as cam saw it: the map's own camera (the narrow frame's) or the wide frame's, whose pixel covers as much
+    // road as the narrow's twice as far, so it reaches half as far and weighs as the narrow's would there
+    observe(p, seg, zpath, cam = this.cam) {
       this.follow(p);
-      const { cam, RES, N } = this, c = Math.cos(p[2]), s = Math.sin(p[2]);
+      const { RES, N } = this, c = Math.cos(p[2]), s = Math.sin(p[2]);
+      const fine = cam.f / this.cam.f, farX = this.OBS_X[1] * Math.min(fine, 1);
       // the observation window's cells (3..40 m ahead, 25 m either side) as world cells
-      const corners = [[this.OBS_X[0], -this.OBS_Y], [this.OBS_X[0], this.OBS_Y], [this.OBS_X[1], -this.OBS_Y], [this.OBS_X[1], this.OBS_Y]]
+      const corners = [[this.OBS_X[0], -this.OBS_Y], [this.OBS_X[0], this.OBS_Y], [farX, -this.OBS_Y], [farX, this.OBS_Y]]
         .map(([x, y]) => [p[0] + c * x - s * y, p[1] + s * x + c * y]);
       const r0 = Math.max(0, Math.floor((Math.min(...corners.map((q) => q[0])) - this.origin[0]) / RES));
       const r1 = Math.min(N, Math.floor((Math.max(...corners.map((q) => q[0])) - this.origin[0]) / RES) + 1);
@@ -342,7 +354,7 @@
         for (let col = c0; col < c1; col++) {
           const dy = this.origin[1] + (col + 0.5) * RES - p[1];
           const ex = c * dx + s * dy, ey = -s * dx + c * dy;
-          if (ex < this.OBS_X[0] || ex > this.OBS_X[1] || Math.abs(ey) > this.OBS_Y) continue;
+          if (ex < this.OBS_X[0] || ex > farX || Math.abs(ey) > this.OBS_Y) continue;
           const i0 = Math.floor(ex), ez = h + zTab[i0] + (zTab[i0 + 1] - zTab[i0]) * (ex - i0);
           const z = Math.max(P[6] * ex + P[7] * ey + P[8] * ez, 1e-3);
           if (z <= 1) continue;
@@ -351,7 +363,7 @@
           const k = seg.cls[Math.min(Math.floor(v / ds), sh - 1) * sw + Math.min(Math.floor(u / ds), sw - 1)];
           if (k === OCCLUDER) continue;  // a car or a person covers the road here: no evidence either way
           // near observations are more accurate (one pixel covers less road), so they weigh more
-          const alpha = this.ALPHA * clamp(1.4 - ex / 30, 0.25, 1);
+          const alpha = this.ALPHA * clamp(1.4 - ex / fine / 30, 0.25, 1);
           const at = (r * N + col) * 4;
           // + 0.5: the bytes round rather than truncate
           a[at] += alpha * ((k === 1) * 255 - a[at]) + 0.5;
@@ -658,7 +670,12 @@
       this.reset();
     }
     reset() {
-      this.cam = this.meta ? new FrameCamera(this.meta) : null;
+      // the camera's height is the comma's word (its calibration), never assumed: without it, nothing is placed
+      this.cam = this.meta && this.meta.frame && this.meta.height > 0 ? new FrameCamera(this.meta) : null;
+      // the wide frame's, turned by the wide camera's angles from the device as the comma calibrated them
+      // (wide.from_device): only where the meta has both. Without, the wide frame's segmentations are not used.
+      const fixed = this.meta && this.meta.wide && wideFromDevice(this.meta.wide);
+      this.wideCam = fixed && this.cam ? new FrameCamera(this.meta, this.meta.wide, rotFromEuler(...fixed)) : null;
       this.smoother = new OutputSmoother(0.3);
       this.trail = new EgoTrail();
       this.roadmap = this.cam ? new RoadMap(this.cam) : null;
@@ -674,7 +691,11 @@
       if (msg.kind === 'M') this.onMeta(msg.meta);
       else if (!this.meta) return;
       else if (msg.kind === 'D') this.step(msg);
-      else if (msg.kind === 'S') { this.pendingSeg.push(msg); keepLast(this.timing.seg, msg.ms, 50); }
+      else if (msg.kind === 'S') {
+        // the narrow frame's in the road view, the wide frame's in bird's-eye; the other is not used
+        if (!!msg.wide !== (this.chooser.target === 1)) return;
+        this.pendingSeg.push(msg); keepLast(this.timing.seg, msg.ms, 50);
+      }
     }
 
     // One 20 Hz frame of the driving model's outputs, and the newest segmentation that has arrived since the last.
@@ -701,11 +722,12 @@
       // the newest segmentation, into the road map from the pose it was seen at
       const segMsg = this.pendingSeg.length ? this.pendingSeg[this.pendingSeg.length - 1] : null;
       this.pendingSeg = [];
-      if (segMsg && this.trail.pose(segMsg.frame)) {
+      const segCam = segMsg && (segMsg.wide ? this.wideCam : this.cam);
+      if (segMsg && this.trail.pose(segMsg.frame) && segCam) {
         keepLast(this.timing.segFrames, segMsg.frame, 20);
         keepLast(this.timing.lag, k - segMsg.frame, 20);
         const seg = readSeg(segMsg, this.meta);
-        this.roadmap.observe(this.trail.pose(segMsg.frame), seg, zpath);
+        this.roadmap.observe(this.trail.pose(segMsg.frame), seg, zpath, segCam);
         this.lastSeg = { frame: segMsg.frame, seg };
       }
 
@@ -724,7 +746,8 @@
       const fresh = this.lastSeg && k - this.lastSeg.frame <= SEG_FRESH ? this.lastSeg.seg : null;
       if (raw.lead_prob[0] > 0.5 && fresh) {
         const x = leadAt(raw.lead, 0, 0, 0), y = leadAt(raw.lead, 0, 0, 1);
-        if (segSeesVehicle(this.cam, fresh, x, y, this.cam.height + zpath(x))) {
+        const freshCam = fresh.wide ? this.wideCam : this.cam;
+        if (freshCam && segSeesVehicle(freshCam, fresh, x, y, this.cam.height + zpath(x))) {
           lead = { x, y, heading: laneHeading(x), braking: leadAt(raw.lead, 0, 0, 3) < -0.8 };
         }
       }

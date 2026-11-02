@@ -7,10 +7,31 @@ see [Diorama](diorama.md).
 ## How it works
 
 The comma already sends the server two things each frame: the warped narrow
-camera image and the driving model's inputs. The server answers with the model's
-outputs. Diorama adds one model that runs on the same warped image:
+and wide camera images and the driving model's inputs. The server answers with
+the model's outputs. Diorama adds one model that runs on a warped image:
 Mask2Former (Swin-L, Mapillary Vistas panoptic), on every other frame (10 Hz).
 It segments the road surface, paint, crosswalks, curbs and sidewalks.
+
+It segments the narrow image in the road view, which sees furthest ahead, and
+the wide image in bird's-eye, which sees the road close around the car: the
+crossings and corners of an intersection, and the sidewalks either side. The
+server keeps the same scene the watchers make, to know which view they show,
+and the scene uses a segmentation only in its camera's view. The wide image's
+pixel covers as much road as the narrow's twice as far, so it fills the road
+map to 20 m ahead rather than 40.
+
+The geometry is the comma's own, never estimated or assumed. Its warp has
+undone the camera's calibration (`rpyCalib`) for both images, but the wide
+camera sits at angles of its own from the device, fixed by how the unit was
+built, and the road is as far below as the camera's height. calibrationd
+keeps both (`wideFromDeviceEuler` and `height`, saved in
+`CalibrationParams`), and the comma's hello carries them as `camera`. Until
+it does (a comma not calibrated yet), the server's Diorama waits and says so.
+A replay and `diorama run` read the same from each segment's `rlog.zst`
+(`diorama/rlog.capnp` is the slice of cereal's schema it needs), warp each
+segment with its logged `rpyCalib`, and refuse a segment without one.
+`diorama run` segments both images every other frame, and the page takes the
+one for its view, as live.
 
 The page does the rest, in the browser, and the apps do the same natively:
 
@@ -181,7 +202,7 @@ the cable out. Wireless CarPlay sharing the radio has not been tried yet.
     new stage, when the Mac's server restarts, keeps viewers connected and
     starts them over from its meta.
 - **What crosses:** only the [messages](#messages) the scene is drawn from: `M`
-  meta, `D` drive and `S` seg, each after its u32 little-endian length
+  meta, `D` drive and `S` and `W` seg, each after its u32 little-endian length
   exactly as a `drive.diorama` holds them. A replayed drive measured about
   180 KB/s (20 drive messages and 10 segmentations a second), well within
   what AWDL carries beside CarPlay.
@@ -272,9 +293,10 @@ follows its u32 length; on the event stream, each is one base64 `data:` line.
 
 | Kind | Fields |
 | --- | --- |
-| `M` meta | JSON: the frame's camera, the drive fields and their float counts, the segmentation's classes |
+| `M` meta | JSON: the frame's camera (`frame`), the wide frame's (`wide`, its `from_device` the wide camera's roll, pitch and yaw from the device), the camera's `height`, the drive fields and their float counts, the segmentation's classes. `height` and `from_device` are the comma's calibration; without them nothing is placed, or no wide frame used |
 | `D` drive | u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs |
 | `S` seg | u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] class (255 dropped), u8[queries] score × 255, u32 runs, then (u8 query, u8 length − 1) per run |
+| `W` wide seg | as `S`, of the wide frame: live, the server sends it in bird's-eye; `diorama run` writes both for every segmented frame. The page uses `S` in the road view and `W` in bird's-eye |
 | `T` status | UTF-8: what the segmentation is doing (`idle`, `preparing …`, `running`, `paused: …`, `off: ` and why). Live only, and not to an iPhone watching a Mac: the page and the apps show it beside the timings when it is not running |
 | `I` input | u32 frame, u16 width, u16 height, u8 planes, then the packed narrow frame the models see (four Y planes, U, V). Live only, and only to a page that asks: the web page's **Model input** toggle on `/diorama/events/frames`, or the Mac view's, or the iPhone tab's on its own server. Never to an iPhone watching a Mac |
 

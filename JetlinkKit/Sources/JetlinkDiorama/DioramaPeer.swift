@@ -27,10 +27,10 @@
     static let maxControl = 4096
     static let maxMessage = 8 << 20
 
-    /// The messages a viewer is sent: `M` meta, `D` drive and `S` seg, which
-    /// the page draws the drive from. `I`, the frames the models see, and
-    /// `T`, what they are doing, stay on the Mac.
-    public static let rendering: Set<UInt8> = [UInt8(ascii: "M"), UInt8(ascii: "D"), UInt8(ascii: "S")]
+    /// The messages a viewer is sent: `M` meta, `D` drive, and `S` and `W`
+    /// segs, which the page draws the drive from. `I`, the frames the models
+    /// see, and `T`, what they are doing, stay on the Mac.
+    public static let rendering: Set<UInt8> = [UInt8(ascii: "M"), UInt8(ascii: "D"), UInt8(ascii: "S"), UInt8(ascii: "W")]
 
     /// TCP over AWDL as well as infrastructure Wi-Fi, without Nagle, and with
     /// keepalives short enough that a phone that drove off is noticed in seconds.

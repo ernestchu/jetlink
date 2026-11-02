@@ -58,12 +58,15 @@ public final class DioramaRoadMap {
     dirty = all
   }
 
-  func observe(_ p: EgoTrail.SIMDPose, _ seg: DioramaSeg, _ zpath: (Double) -> Double) {
+  /// `seg` as `cam` saw it: the map's own camera (the narrow frame's) or the wide frame's, whose pixel covers as
+  /// much road as the narrow's twice as far, so it reaches half as far and weighs as the narrow's would there.
+  func observe(_ p: EgoTrail.SIMDPose, _ seg: DioramaSeg, _ zpath: (Double) -> Double, _ cam: DioramaFrameCamera) {
     follow(p)
     guard let origin else { return }
     let cell = Self.res, cells = Self.n, c = cos(p.yaw), s = sin(p.yaw)
+    let fine = cam.f / self.cam.f, farX = Self.obsX.1 * min(fine, 1)
     // the observation window's cells (3..40 m ahead, 25 m either side) as world cells
-    let corners = [(Self.obsX.0, -Self.obsY), (Self.obsX.0, Self.obsY), (Self.obsX.1, -Self.obsY), (Self.obsX.1, Self.obsY)]
+    let corners = [(Self.obsX.0, -Self.obsY), (Self.obsX.0, Self.obsY), (farX, -Self.obsY), (farX, Self.obsY)]
       .map { (x, y) in (p.x + c * x - s * y, p.y + s * x + c * y) }
     let r0 = max(0, Int(((corners.map(\.0).min()! - origin.x) / cell).rounded(.down)))
     let r1 = min(cells, Int(((corners.map(\.0).max()! - origin.x) / cell).rounded(.down)) + 1)
@@ -82,7 +85,7 @@ public final class DioramaRoadMap {
             for col in c0..<c1 {
               let dy = origin.y + (Double(col) + 0.5) * cell - p.y
               let ex = c * dx + s * dy, ey = -s * dx + c * dy
-              if ex < Self.obsX.0 || ex > Self.obsX.1 || abs(ey) > Self.obsY { continue }
+              if ex < Self.obsX.0 || ex > farX || abs(ey) > Self.obsY { continue }
               let i0 = Int(ex), ez = h + zTab[i0] + (zTab[i0 + 1] - zTab[i0]) * (ex - Double(i0))
               let z = max(proj[6] * ex + proj[7] * ey + proj[8] * ez, 1e-3)
               if z <= 1 { continue }
@@ -91,7 +94,7 @@ public final class DioramaRoadMap {
               let k = cls[min(Int(v / ds), sh - 1) * sw + min(Int(u / ds), sw - 1)]
               if k == Diorama.occluder { continue }  // a car or a person covers the road here: no evidence either way
               // near observations are more accurate (one pixel covers less road), so they weigh more
-              let alpha = Self.alpha * Diorama.clamp(1.4 - ex / 30, 0.25, 1)
+              let alpha = Self.alpha * Diorama.clamp(1.4 - ex / fine / 30, 0.25, 1)
               let at = (r * cells + col) * 4
               // + 0.5: the bytes round rather than truncate
               @inline(__always) func blend(_ x: UInt8, _ on: Bool) -> UInt8 {

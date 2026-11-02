@@ -26,26 +26,23 @@ def main(argv: list[str] | None = None) -> int:
   e.add_argument('--coreml', action='store_true', help="also native CoreML packages, which the Mac app runs (needs coremltools)")
 
   r = sub.add_parser('run', help="run a recorded drive through the driving model and Diorama's models")
-  r.add_argument('segments', type=Path, nargs='+', help="the drive's segment folders (fcamera.hevc, ecamera.hevc), or a folder of them")
+  r.add_argument('segments', type=Path, nargs='+',
+                 help="the drive's segment folders (fcamera.hevc, ecamera.hevc and rlog.zst, whose calibration is used), or a folder of them")
   r.add_argument('--model', required=True, help='the driving model ONNX, as jetlink serves it')
   r.add_argument('--models', '--nets', dest='models', type=Path, required=True, help='the folder `export` wrote')
   r.add_argument('--out', type=Path, required=True)
   r.add_argument('--start', type=float, default=0.0, help='seconds into the drive')
   r.add_argument('--seconds', type=float, help='how much of it (default: to the end)')
   r.add_argument('--device', choices=('auto', 'cuda', 'coreml', 'cpu'), default='auto')
-  r.add_argument('--rpy', type=float, nargs=3, metavar=('ROLL', 'PITCH', 'YAW'), default=[0.0, 0.0, 0.0],
-                 help="the camera's calibration in radians (default 0 0 0: as mounted)")
   r.add_argument('--rhd', action='store_true', help='left-hand traffic (the driver sits on the right)')
 
   p = sub.add_parser('replay', help="play a recorded drive into a running jetlink server, as a comma would, for its live page")
-  p.add_argument('segments', type=Path, nargs='+')
+  p.add_argument('segments', type=Path, nargs='+', help='as for run: segment folders with fcamera.hevc, ecamera.hevc and rlog.zst')
   p.add_argument('--model', required=True, help='the driving model ONNX; uploaded to the server if it lacks it')
   p.add_argument('--host', default='127.0.0.1')
   p.add_argument('--port', type=int, default=5599)
   p.add_argument('--start', type=float, default=0.0)
   p.add_argument('--seconds', type=float)
-  p.add_argument('--rpy', type=float, nargs=3, metavar=('ROLL', 'PITCH', 'YAW'), default=[0.0, 0.0, 0.0],
-                 help="the camera's calibration in radians (default 0 0 0: as mounted)")
   p.add_argument('--rhd', action='store_true')
   p.add_argument('--loop', action='store_true', help='start over at the end')
 
@@ -65,10 +62,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f'wrote {args.out}')
   elif args.cmd == 'run':
     from diorama.offline import run
-    run(args.segments, args.model, args.models, args.out, args.start, args.seconds, args.device, args.rpy, rhd=args.rhd)
+    run(args.segments, args.model, args.models, args.out, args.start, args.seconds, args.device, rhd=args.rhd)
   elif args.cmd == 'replay':
     from diorama.replay import replay
-    replay(args.segments, args.model, args.host, args.port, args.start, args.seconds, args.rpy, args.rhd, args.loop)
+    replay(args.segments, args.model, args.host, args.port, args.start, args.seconds, args.rhd, args.loop)
   elif args.cmd == 'assets':
     from diorama.assets import RESOURCES, write_library
     out = args.out or RESOURCES / 'diorama-assets.bin'

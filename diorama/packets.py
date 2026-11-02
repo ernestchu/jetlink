@@ -9,10 +9,12 @@ stores them: one byte of kind, then its payload, little-endian throughout.
 JetlinkDiorama's DioramaPackets.swift writes the same bytes and diorama.js
 reads them; docs/diorama-internals.md has the table.
 
-    M  meta    JSON: the frame's camera, the drive fields and their float counts, the models' classes
+    M  meta    JSON: the frame's camera and the wide frame's (with the wide camera's angles from the device),
+               the camera's height, the drive fields and their float counts, the models' classes
     D  drive   u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs, in meta's order
     S  seg     u32 frame, f32 ms, u16 width, u16 height, u16 queries, u8[queries] label (255: dropped),
                u8[queries] score * 255, u32 runs, runs x (u8 query, u8 length - 1): the query map, row by row
+    W  seg     as S, of the wide frame: the page uses S in the road view and W in bird's-eye
 
 `frame` counts the comma's frames (20 a second); a seg message names
 the frame its image came from. The milliseconds are how long the driving model
@@ -27,7 +29,7 @@ import struct
 
 import numpy as np
 
-META, DRIVE, SEG = b'M', b'D', b'S'
+META, DRIVE, SEG, WIDE_SEG = b'M', b'D', b'S', b'W'
 
 
 def meta(info: dict) -> bytes:
@@ -56,15 +58,22 @@ def rle(qmap: np.ndarray) -> bytes:
   return struct.pack('<I', len(values)) + runs.tobytes()
 
 
-def seg(frame: int, ms: float, qmap: np.ndarray, label: np.ndarray, score: np.ndarray) -> bytes:
-  """The seg graph's float outputs as a message: the query map as bytes, and each query's class and score."""
+def wide_frame(frame: dict) -> dict:
+  """The wide frame as the comma warps it, openpilot's sbigmodel: half the narrow frame's focal length, its horizon
+  halfway down from the narrow's. DioramaStage.swift makes the same of diorama.json's frame."""
+  return dict(frame, f=frame['f'] / 2, cy=(frame['h'] + frame['cy']) / 2)
+
+
+def seg(frame: int, ms: float, qmap: np.ndarray, label: np.ndarray, score: np.ndarray, wide: bool = False) -> bytes:
+  """The seg graph's float outputs as a message: the query map as bytes, and each query's class and score; of the
+  narrow frame, or the wide."""
   q = np.asarray(qmap, np.float32).reshape(qmap.shape[-2:])
   h, w = q.shape
   keep = np.asarray(score) > 0
   labels = np.where(keep, np.asarray(label), 255).astype(np.uint8)
   scores = np.round(np.clip(score, 0, 1) * 255).astype(np.uint8)
   head = struct.pack('<IfHHH', frame, ms, w, h, len(labels))
-  return SEG + head + labels.tobytes() + scores.tobytes() + rle(q.astype(np.uint8))
+  return (WIDE_SEG if wide else SEG) + head + labels.tobytes() + scores.tobytes() + rle(q.astype(np.uint8))
 
 
 def write(fh, message: bytes) -> None:

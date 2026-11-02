@@ -72,6 +72,11 @@ public enum Diorama {
     return [co[0], -(b * i - c * h), b * f - c * e, co[1], a * i - c * g, -(a * f - c * d), co[2], -(a * h - b * g), a * e - b * d].map { $0 / det }
   }
   public static let viewFromDevice: [Double] = [0, 1, 0, 0, 0, 1, 1, 0, 0]
+  /// openpilot's rot_from_euler: roll about x, then pitch about y, then yaw about z.
+  static func rotFromEuler(_ r: Double, _ p: Double, _ y: Double) -> [Double] {
+    let (cr, sr, cp, sp, cy, sy) = (cos(r), sin(r), cos(p), sin(p), cos(y), sin(y))
+    return m3mul([cy, -sy, 0, sy, cy, 0, 0, 0, 1], m3mul([cp, 0, sp, 0, 1, 0, -sp, 0, cp], [1, 0, 0, 0, cr, -sr, 0, sr, cr]))
+  }
 }
 
 // MARK: - messages
@@ -105,7 +110,7 @@ public enum DioramaMessage: Sendable {
     case UInt8(ascii: "D") where b.count >= 13:
       let n = (b.count - 13) / 4
       self = .drive(frame: u32(1), seconds: Double(f32(5)), ms: Double(f32(9)), values: (0..<n).map { f32(13 + 4 * $0) })
-    case UInt8(ascii: "S") where b.count >= 15:
+    case UInt8(ascii: "S") where b.count >= 15, UInt8(ascii: "W") where b.count >= 15:
       let w = u16(9), h = u16(11), nq = u16(13)
       var at = 15
       let label = Array(b[at..<at + nq])
@@ -123,7 +128,7 @@ public enum DioramaMessage: Sendable {
         p += len
         at += 2
       }
-      self = .seg(DioramaSegMessage(frame: u32(1), ms: Double(f32(5)), w: w, h: h, label: label, score: score, qmap: qmap))
+      self = .seg(DioramaSegMessage(frame: u32(1), ms: Double(f32(5)), w: w, h: h, label: label, score: score, qmap: qmap, wide: kind == UInt8(ascii: "W")))
     default:
       self = .other
     }
@@ -146,28 +151,40 @@ public enum DioramaMessage: Sendable {
 public struct DioramaSegMessage: Sendable {
   public let frame: Int, ms: Double, w: Int, h: Int
   public let label: [UInt8], score: [UInt8], qmap: [UInt8]
+  /// Of the wide frame, not the narrow.
+  public var wide = false
 }
 
-/// The meta message: the frame's camera, the driving model's heads, and the segmentation's classes.
+/// The meta message: the frame's camera (and the wide frame's, live), the driving model's heads, and the segmentation's classes.
 public struct DioramaMeta: Sendable {
   public struct Frame: Sendable { public let w: Double, h: Double, f: Double, cx: Double, cy: Double }
   public struct Seg: Sendable {
     public let labels: [String], things: [String: String], roadClass: [String: Int], ds: Double
   }
-  public let frame: Frame?
-  public let height: Double
+  public let frame: Frame?, wide: Frame?
+  /// The wide camera's roll, pitch and yaw from the device, as the comma calibrated them, where it said.
+  public let wideFromDevice: [Double]?
+  /// The camera's height above the road, as the comma calibrated it; nothing is placed without it.
+  public let height: Double?
   public let drive: [(name: String, count: Int)]
   public let seg: Seg?
   public let route: String?
 
   public init(_ json: [String: Any]) {
     func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
-    if let f = json["frame"] as? [String: Any], let w = num(f["w"]), let h = num(f["h"]), let fl = num(f["f"]), let cx = num(f["cx"]), let cy = num(f["cy"]) {
-      frame = Frame(w: w, h: h, f: fl, cx: cx, cy: cy)
-    } else {
-      frame = nil
+    func camera(_ v: Any?) -> Frame? {
+      guard let f = v as? [String: Any], let w = num(f["w"]), let h = num(f["h"]), let fl = num(f["f"]), let cx = num(f["cx"]), let cy = num(f["cy"]) else {
+        return nil
+      }
+      return Frame(w: w, h: h, f: fl, cx: cx, cy: cy)
     }
-    height = num(json["height"]).flatMap { $0 == 0 ? nil : $0 } ?? 1.22
+    frame = camera(json["frame"])
+    wide = camera(json["wide"])
+    wideFromDevice = ((json["wide"] as? [String: Any])?["from_device"] as? [Any]).flatMap { a in
+      let v = a.compactMap { num($0) }
+      return v.count == 3 ? v : nil
+    }
+    height = num(json["height"]).flatMap { $0 > 0 ? $0 : nil }
     drive = (json["drive"] as? [[Any]] ?? []).compactMap { pair in
       guard pair.count == 2, let name = pair[0] as? String, let n = num(pair[1]) else { return nil }
       return (name, Int(n))
@@ -276,16 +293,20 @@ struct OutputSmoother {
 
 // MARK: - the camera that saw the frame
 
-/// The driving model's narrow frame is already calibrated: road point -> pixel is K view_from_device.
+/// The driving model's frames are already calibrated: road point -> pixel is K view_from_device, K the narrow
+/// frame's or the wide's. The comma warps the wide camera with the narrow one's calibration, so the wide frame is
+/// turned by the wide camera's angles from the device too (`rotation`, the model's wide_from_device_euler).
 public struct DioramaFrameCamera: Sendable {
-  public let w: Double, h: Double, height: Double
+  public let w: Double, h: Double, f: Double, height: Double
   let proj: [Double], inverse: [Double]
 
-  init(_ meta: DioramaMeta, frame f: DioramaMeta.Frame) {
+  init(_ meta: DioramaMeta, frame f: DioramaMeta.Frame, rotation: [Double]? = nil) {
     w = f.w
     h = f.h
-    height = meta.height
-    proj = Diorama.m3mul([f.f, 0, f.cx, 0, f.f, f.cy, 0, 0, 1], Diorama.viewFromDevice)
+    self.f = f.f
+    height = meta.height ?? 0
+    let view = rotation.map { Diorama.m3mul(Diorama.viewFromDevice, $0) } ?? Diorama.viewFromDevice
+    proj = Diorama.m3mul([f.f, 0, f.cx, 0, f.f, f.cy, 0, 0, 1], view)
     inverse = Diorama.m3inv(proj)
   }
 
@@ -347,6 +368,8 @@ struct EgoTrail {
 /// `occluder` under a thing) and the things, each by its kind.
 public struct DioramaSeg: Sendable {
   public let w: Int, h: Int, ds: Double
+  /// Of the wide frame, not the narrow.
+  public let wide: Bool
   public let cls: [UInt8], qmap: [UInt8]
   public let qThing: [String?]
 
@@ -366,6 +389,7 @@ public struct DioramaSeg: Sendable {
     }
     w = msg.w
     h = msg.h
+    wide = msg.wide
     ds = seg.ds
     qmap = msg.qmap
     cls = msg.qmap.map { $0 == 255 ? 0 : qClass[Int($0)] }
@@ -450,6 +474,9 @@ public final class DioramaScene {
 
   public private(set) var meta: DioramaMeta?
   public private(set) var cam: DioramaFrameCamera?
+  /// The wide frame's camera, turned by the wide camera's angles from the device as the comma calibrated them: only
+  /// where the meta has both. Without, the wide frame's segmentations are not used.
+  public private(set) var wideCam: DioramaFrameCamera?
   public private(set) var roadmap: DioramaRoadMap?
   public private(set) var state: State?
   public private(set) var frame = -1
@@ -467,7 +494,12 @@ public final class DioramaScene {
   public init() {}
 
   public func reset() {
-    cam = meta.flatMap { meta in meta.frame.map { DioramaFrameCamera(meta, frame: $0) } }
+    // the camera's height is the comma's word (its calibration), never assumed: without it, nothing is placed
+    cam = meta.flatMap { meta in meta.height == nil ? nil : meta.frame.map { DioramaFrameCamera(meta, frame: $0) } }
+    wideCam = meta.flatMap { meta in
+      guard cam != nil, let r = meta.wideFromDevice, let wide = meta.wide else { return nil }
+      return DioramaFrameCamera(meta, frame: wide, rotation: Diorama.rotFromEuler(r[0], r[1], r[2]))
+    }
     smoother = OutputSmoother(k: 0.3)
     trail = EgoTrail()
     roadmap = cam.map { DioramaRoadMap(cam: $0) }
@@ -491,6 +523,8 @@ public final class DioramaScene {
     case .drive(let frame, let seconds, let ms, let values) where meta != nil:
       step(frame: frame, seconds: seconds, ms: ms, values: values)
     case .seg(let seg) where meta != nil:
+      // the narrow frame's in the road view, the wide frame's in bird's-eye; the other is not used
+      guard seg.wide == (chooser.target == 1) else { break }
       pendingSeg = seg
       keepLast(&timing.seg, seg.ms, 50)
     default:
@@ -525,11 +559,11 @@ public final class DioramaScene {
     // the newest segmentation, into the road map from the pose it was seen at
     let segMsg = pendingSeg
     pendingSeg = nil
-    if let segMsg, let seen = trail.pose(segMsg.frame), let segInfo = meta.seg {
+    if let segMsg, let seen = trail.pose(segMsg.frame), let segInfo = meta.seg, let segCam = segMsg.wide ? wideCam : cam {
       keepLast(&timing.segFrames, segMsg.frame, 20)
       keepLast(&timing.lag, k - segMsg.frame, 20)
       let seg = DioramaSeg(segMsg, segInfo)
-      roadmap.observe(seen, seg, zpath)
+      roadmap.observe(seen, seg, zpath, segCam)
       lastSeg = (segMsg.frame, seg)
     }
 
@@ -547,7 +581,7 @@ public final class DioramaScene {
     var lead: Lead? = nil
     if let p = raw.leadProb.first, p > 0.5, !raw.lead.isEmpty, let last = lastSeg, k - last.frame <= Diorama.segFresh {
       let x = raw.lead(0, 0, 0), y = raw.lead(0, 0, 1)
-      if last.seg.seesVehicle(cam, x, y, cam.height + zpath(x)) {
+      if let segCam = last.seg.wide ? wideCam : cam, last.seg.seesVehicle(segCam, x, y, cam.height + zpath(x)) {
         lead = Lead(x: x, y: y, heading: laneHeading(x), braking: raw.lead(0, 0, 3) < -0.8)
       }
     }

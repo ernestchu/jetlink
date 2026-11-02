@@ -21,7 +21,7 @@ import pytest
 
 from diorama import packets
 from diorama.outputs import IDX_N, LEAD_MHP_N, LEAD_MHP_SELECTION, LEAD_TRAJ_LEN, LEAD_WIDTH, X_IDXS, parse
-from diorama.route import rot_from_euler, warp_matrix
+from diorama.route import RLOG_SCHEMA, read_calibration, rot_from_euler, warp_matrix
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / 'JetlinkKit/Sources/JetlinkDiorama/Resources/diorama-engine.js'
@@ -92,13 +92,15 @@ def test_the_warp():
   assert np.allclose(p[:2] / p[2], [964, 604])
 
 
-def synthetic_drive(path: Path, frames: int = 40, car_at: float | None = 20.0) -> None:
+def synthetic_drive(path: Path, frames: int = 40, car_at: float | None = 20.0, wide: bool = False) -> None:
   """A straight road at 10 m/s, seen every other frame, with a car on it `car_at` metres ahead (None: no
-  segmentation at all); the model's lead 0.1 m further each frame, 20 m to 23.9 m."""
+  segmentation at all); the model's lead 0.1 m further each frame, 20 m to 23.9 m. `wide`: the segmentations
+  are the wide frame's."""
   fields = [('plan', 2 * IDX_N * 15), ('lane_lines', 2 * 4 * IDX_N * 2), ('lane_lines_prob', 8), ('road_edges', 2 * 2 * IDX_N * 2),
             ('lead', 2 * 3 * 6 * 4), ('lead_prob', 3), ('pose', 12)]
   meta = {
     'version': 1, 'fps': 20, 'height': 1.22, 'frame': {'w': 512, 'h': 256, 'f': 910.0, 'cx': 256.0, 'cy': 47.6},
+    'wide': {'w': 512, 'h': 256, 'f': 455.0, 'cx': 256.0, 'cy': 151.8, 'from_device': [0.0, 0.0, 0.0]},
     'drive': [list(f) for f in fields],
     'seg': {'labels': ['Road', 'Car'], 'road_class': {'Road': 1}, 'things': {'Car': 'car'}, 'ds': 2},
   }
@@ -139,7 +141,7 @@ def synthetic_drive(path: Path, frames: int = 40, car_at: float | None = 20.0) -
     for k in range(frames):
       packets.write(fh, packets.drive(k, k / 20, 4.0, values(k)))
       if k % 2 == 0 and car_at is not None:
-        packets.write(fh, packets.seg(k, 20.0, qmap, label, score))
+        packets.write(fh, packets.seg(k, 20.0, qmap, label, score, wide=wide))
 
 
 def engine_state(tmp_path: Path, **drive) -> dict:
@@ -174,6 +176,61 @@ def test_page_engine_draws_each_frames_lead(tmp_path):
 @pytest.mark.parametrize('car_at', [None, 40.0], ids=['no segmentation', 'the car seen is further on'])
 def test_page_engine_hides_a_lead_the_segmentation_does_not_see(tmp_path, car_at):
   assert engine_state(tmp_path, car_at=car_at)['lead'] is None
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page engine')
+def test_page_engine_uses_only_the_narrow_frames_segmentation_in_the_road_view(tmp_path):
+  out = engine_state(tmp_path, wide=True)
+  assert out['view'] == 0 and out['lead'] is None
+
+
+def test_a_wide_seg_message_is_a_seg_of_another_kind():
+  qmap, label, score = np.zeros((128, 256), np.float32), np.zeros(4, np.float32), np.ones(4, np.float32)
+  narrow, wide = packets.seg(2, 1.0, qmap, label, score), packets.seg(2, 1.0, qmap, label, score, wide=True)
+  assert narrow[:1] == packets.SEG and wide[:1] == packets.WIDE_SEG and narrow[1:] == wide[1:]
+  assert packets.wide_frame({'w': 512, 'h': 256, 'f': 910.0, 'cx': 256.0, 'cy': 47.6}) == \
+    {'w': 512, 'h': 256, 'f': 455.0, 'cx': 256.0, 'cy': 151.8}
+
+
+def rlog(segment: Path, *calibrations: tuple[str, list, list, list], other: int = 3) -> None:
+  """A segment's rlog.zst: `other` events of members the schema leaves out, then each (status, rpyCalib,
+  wideFromDeviceEuler, height) as a calibration event, as calibrationd logs them."""
+  capnp = pytest.importorskip('capnp')
+  zstandard = pytest.importorskip('zstandard')
+  capnp.remove_import_hook()
+  log = capnp.load(str(RLOG_SCHEMA))
+  out = b''
+  for _ in range(other):
+    out += log.Event.new_message(logMonoTime=1, reserved60=None).to_bytes()
+  for status, rpy, wide, height in calibrations:
+    ev = log.Event.new_message(logMonoTime=2)
+    cal = ev.init('calibration')
+    cal.calStatus, cal.rpyCalib, cal.wideFromDeviceEuler, cal.height = status, rpy, wide, height
+    out += ev.to_bytes()
+  segment.mkdir(parents=True, exist_ok=True)
+  (segment / 'rlog.zst').write_bytes(zstandard.ZstdCompressor().compress(out))
+
+
+def test_the_calibration_is_the_first_calibrated_one_the_rlog_has(tmp_path):
+  seg = tmp_path / 'r--0'
+  rlog(seg, ('uncalibrated', [0, 0, 0], [0, 0, 0], [1.22]), ('calibrated', [0.0001, 0.0433, 0.0146], [0, 0.0217, -0.0161], [1.375]),
+       ('calibrated', [0, 0.05, 0], [0, 0.03, 0], [1.4]))
+  cal = read_calibration(seg)
+  assert np.allclose(cal.rpy, (0.0001, 0.0433, 0.0146)) and np.allclose(cal.wide_from_device, (0, 0.0217, -0.0161))
+  assert abs(cal.height - 1.375) < 1e-6
+
+
+def test_a_segment_without_a_calibrated_rlog_is_refused(tmp_path):
+  with pytest.raises(SystemExit, match='no rlog.zst'):
+    read_calibration(tmp_path / 'none')
+  rlog(tmp_path / 'never', ('uncalibrated', [0, 0, 0], [0, 0, 0], [1.22]))
+  with pytest.raises(SystemExit, match='no calibrated'):
+    read_calibration(tmp_path / 'never')
+  (tmp_path / 'broken').mkdir()
+  (tmp_path / 'broken' / 'rlog.zst').write_bytes(b'not zstd')
+  pytest.importorskip('zstandard')
+  with pytest.raises(SystemExit, match='cannot read'):
+    read_calibration(tmp_path / 'broken')
 
 
 def test_export_unpack_matches_opencv():

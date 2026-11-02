@@ -7,9 +7,10 @@ See the LICENSE file in the root directory for more details.
 A recorded drive as the comma's modeld would see it: the segments' road and
 wide camera files decoded in step, and each frame warped to the driving
 model's two 512x256 frames and packed into the six planes an INFER_REQ
-carries. The warp is openpilot's (common/transformations), with the camera's
-calibration as given (0 0 0, the camera as mounted, by default), so a route
-needs only its video files.
+carries. The warp is openpilot's (common/transformations), with the
+calibration the comma logged in each segment's rlog: nothing is estimated
+from the video or assumed, and a segment without a calibrated rlog is
+refused. Reading the rlog needs pycapnp and zstandard.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from pathlib import Path
 import numpy as np
 
 FPS = 20
+RLOG_SCHEMA = Path(__file__).resolve().parent / 'rlog.capnp'
 # Focal lengths by sensor resolution (openpilot's DEVICE_CAMERAS): comma 3X's
 # AR0231 and OX03C10, and comma 4's OS04C10 binned.
 FOCALS = {(1928, 1208): (2648.0, 567.0), (1344, 760): (1141.5, 425.25)}
@@ -89,6 +91,47 @@ def read_yuv(path: Path, size: tuple[int, int]) -> Iterator[np.ndarray]:
     p.wait()
 
 
+@dataclass(frozen=True)
+class Calibration:
+  """What calibrationd logged for a segment: the camera's roll, pitch and yaw
+  from the device (rpyCalib, which the warp undoes for both cameras), the wide
+  camera's from the device (wideFromDeviceEuler) and the camera's height
+  above the road, in radians and metres."""
+  rpy: tuple[float, float, float]
+  wide_from_device: tuple[float, float, float]
+  height: float
+
+
+def read_calibration(segment: Path) -> Calibration:
+  """The first calibrated calibration in a segment's rlog.zst, or SystemExit saying why there is none."""
+  rlog = segment / 'rlog.zst'
+  if not rlog.exists():
+    raise SystemExit(f"{segment} has no rlog.zst: the camera's calibration comes from it")
+  try:
+    import capnp
+    import zstandard
+  except ImportError:
+    raise SystemExit("reading a drive's rlog needs pycapnp and zstandard: python3 -m pip install pycapnp zstandard") from None
+  capnp.remove_import_hook()
+  log = capnp.load(str(RLOG_SCHEMA))
+  try:
+    with open(rlog, 'rb') as fh:
+      raw = zstandard.ZstdDecompressor().stream_reader(fh).read()
+    for event in log.Event.read_multiple_bytes(raw):
+      try:
+        if event.which() != 'calibration':
+          continue
+      except Exception:
+        continue  # a member of the union the schema leaves out
+      c = event.calibration
+      if str(c.calStatus) != 'calibrated' or len(c.rpyCalib) != 3 or len(c.wideFromDeviceEuler) != 3 or len(c.height) != 1:
+        continue
+      return Calibration(tuple(map(float, c.rpyCalib)), tuple(map(float, c.wideFromDeviceEuler)), float(c.height[0]))
+  except Exception as e:
+    raise SystemExit(f"cannot read {rlog}: {e}") from None
+  raise SystemExit(f"{rlog} has no calibrated camera calibration (the comma was not calibrated yet)")
+
+
 @dataclass
 class Route:
   """The segments of one drive, in order."""
@@ -96,6 +139,12 @@ class Route:
   size: tuple[int, int]
   narrow_fl: float
   wide_fl: float
+  calibrations: list[Calibration]
+
+  @property
+  def calibration(self) -> Calibration:
+    """The first segment's: what the comma says of its cameras as the drive starts."""
+    return self.calibrations[0]
 
   @classmethod
   def open(cls, paths: list[Path]) -> Route:
@@ -118,22 +167,24 @@ class Route:
     size = probe_size(segs[0] / 'fcamera.hevc')
     if size not in FOCALS:
       raise SystemExit(f"unknown camera {size[0]}x{size[1]}; known: {', '.join(f'{w}x{h}' for w, h in FOCALS)}")
-    return cls(segs, size, *FOCALS[size])
+    return cls(segs, size, *FOCALS[size], [read_calibration(s) for s in segs])
 
-  def frames(self, start: int = 0, count: int | None = None) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
-    """(frame index from the route's start, narrow yuv, wide yuv)."""
+  def frames(self, start: int = 0, count: int | None = None) -> Iterator[tuple[int, int, np.ndarray, np.ndarray]]:
+    """(frame index from the route's start, its segment's index, narrow yuv, wide yuv)."""
     k = 0
-    for seg in self.segments:
+    for i, seg in enumerate(self.segments):
       for f, e in zip(read_yuv(seg / 'fcamera.hevc', self.size), read_yuv(seg / 'ecamera.hevc', self.size), strict=False):
         if count is not None and k >= start + count:
           return
         if k >= start:
-          yield k, f, e
+          yield k, i, f, e
         k += 1
 
-  def warped(self, rpy, start: int = 0, count: int | None = None) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
-    """(frame index, narrow yuv, (2, 6, 128, 256) warped narrow and wide) as an INFER_REQ carries them."""
-    Mn = warp_matrix(rpy, self.narrow_fl, self.size, big=False)
-    Mw = warp_matrix(rpy, self.wide_fl, self.size, big=True)
-    for k, f, e in self.frames(start, count):
+  def warped(self, start: int = 0, count: int | None = None) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
+    """(frame index, narrow yuv, (2, 6, 128, 256) warped narrow and wide) as an INFER_REQ carries them, each
+    segment's frames with its own calibration, as modeld warps with the newest."""
+    warps = [(warp_matrix(c.rpy, self.narrow_fl, self.size, big=False), warp_matrix(c.rpy, self.wide_fl, self.size, big=True))
+             for c in self.calibrations]
+    for k, i, f, e in self.frames(start, count):
+      Mn, Mw = warps[i]
       yield k, f, np.stack([pack(f, Mn, self.size), pack(e, Mw, self.size)])

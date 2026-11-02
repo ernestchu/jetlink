@@ -19,6 +19,7 @@ enum SyntheticDrive {
     let json: [String: Any] = [
       "version": 1, "fps": 20, "live": true, "height": 1.22,
       "frame": ["w": 512, "h": 256, "f": 910, "cx": 256, "cy": 47.6],
+      "wide": ["w": 512, "h": 256, "f": 455, "cx": 256, "cy": 151.8, "from_device": [0, 0.02, -0.016]],
       "drive": fields.map { [$0.0, $0.1] as [Any] },
       "seg": [
         "ds": 2, "labels": labels, "things": ["Car": "car"],
@@ -198,6 +199,49 @@ struct DioramaSceneTests {
     guard case .seg(let seg) = DioramaMessage(messages[3]) else { Issue.record("no seg"); return }
     #expect(seg.frame == 1 && seg.w == 256 && seg.h == 128 && seg.qmap.count == 256 * 128)
     #expect(seg.qmap[0] == 255 && seg.qmap[seg.qmap.count - 128] == SyntheticDrive.road)
+    #expect(!seg.wide)
+    // the same segmentation of the wide frame
+    var wide = messages[3]
+    wide[wide.startIndex] = UInt8(ascii: "W")
+    guard case .seg(let w) = DioramaMessage(wide) else { Issue.record("no wide seg"); return }
+    #expect(w.wide && w.frame == 1 && w.qmap == seg.qmap)
+  }
+
+  @Test("A segmentation counts only in its camera's view: the narrow frame's in the road view, the wide frame's in bird's-eye")
+  func camerasByView() {
+    for wide in [false, true] {
+      let scene = DioramaScene()
+      var used = 0, birdsEye = false
+      for var m in SyntheticDrive.messages(frames: 400) {
+        if m.first == UInt8(ascii: "S") {
+          if wide { m[m.startIndex] = UInt8(ascii: "W") }
+          birdsEye = scene.state.map { !$0.viewWhy.isEmpty } ?? false
+          let before = scene.lastSeg?.frame
+          scene.push(DioramaMessage(m))
+          guard case .seg(let seg) = DioramaMessage(m) else { continue }
+          scene.push(DioramaMessage(SyntheticDrive.drive(seg.frame + 1)))
+          let took = scene.lastSeg?.frame == seg.frame && before != seg.frame
+          #expect(took == (birdsEye == wide), "frame \(seg.frame): wide \(wide), bird's-eye \(birdsEye)")
+          if took { used += 1 }
+          continue
+        }
+        scene.push(DioramaMessage(m))
+      }
+      #expect(used > 20)
+    }
+  }
+
+  @Test("Without the comma's camera height nothing is placed, and without its wide calibration no wide frame is used")
+  func uncalibrated() throws {
+    let json = try #require(try JSONSerialization.jsonObject(with: SyntheticDrive.meta.dropFirst()) as? [String: Any])
+    for drop in ["height", "wide"] {
+      var j = json
+      j.removeValue(forKey: drop)
+      let scene = DioramaScene()
+      scene.push(DioramaMessage(Data("M".utf8) + (try JSONSerialization.data(withJSONObject: j))))
+      #expect((scene.cam == nil) == (drop == "height"))
+      #expect(scene.wideCam == nil)
+    }
   }
 
   @Test("The scene follows the drive: the road view at speed, bird's-eye when slow or at a crosswalk, a lead and a crosswalk")

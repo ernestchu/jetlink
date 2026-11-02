@@ -16,7 +16,11 @@ You can watch it:
 
 The view follows behind the car while it cruises, and pans up to a bird's-eye
 view when it stops, turns, nears a crosswalk or sits in traffic. The label in
-the corner says which, and why.
+the corner says which, and why. The road view is drawn from the narrow camera,
+which sees furthest ahead; bird's-eye from the wide camera, which sees the
+road all around the car. Everywhere Diorama runs, live or from a recording,
+it takes the cameras' calibration from the comma: until the comma has
+calibrated (its first drive), Diorama waits and says so.
 
 Diorama needs a segmentation model, about 900 MB (510 MB as the Mac's CoreML
 version). It runs on the GPU only while someone watches, and steps aside
@@ -40,7 +44,7 @@ checkout of Jetlink, which the replay and the commands below run from:
 curl -LsSf https://astral.sh/uv/install.sh | sh     # uv, if you don't have it
 sudo apt install git ffmpeg
 git clone https://github.com/zoompilot/jetlink ~/jetlink && cd ~/jetlink
-uv venv && uv pip install --python .venv -e . onnx onnxruntime opencv-python
+uv venv && uv pip install --python .venv -e . onnx onnxruntime opencv-python pycapnp zstandard
 ```
 
 Then fetch the model:
@@ -99,8 +103,8 @@ shows the road and path without the model's detail.
 
 To try it at a desk without the car, play a recorded drive into the running
 server as the comma would. You need the drive's segment folders (each with
-`fcamera.hevc` and `ecamera.hevc`, from the comma's `/data/media/0/realdata`)
-and a driving model ONNX ([catalog](models.md)). In a second terminal, from the
+`fcamera.hevc`, `ecamera.hevc` and `rlog.zst`, from the comma's
+`/data/media/0/realdata`) and a driving model ONNX ([catalog](models.md)). In a second terminal, from the
 checkout:
 
 ```bash
@@ -117,8 +121,9 @@ cd ~/jetlink
   `--start 20 --seconds 30` plays 30 s from 20 s in.
 - **Once:** leave out `--loop` to stop at the end.
 - **Another computer:** give its address as `--host`. Its server needs `--listen`.
-- **Calibration:** the camera is taken as mounted (`--rpy 0 0 0`).
-  `--rpy ROLL PITCH YAW` (radians) gives the car's own, if you know it.
+- **Calibration:** each segment's comes from its `rlog.zst`, as the comma
+  logged it: nothing is estimated or assumed. A segment without one, or from
+  before the comma had calibrated, is refused, saying which.
 
 ### Watch it
 
@@ -146,7 +151,7 @@ checkout of Jetlink, which the replay also runs from:
 brew install uv xcodegen ffmpeg
 git clone https://github.com/zoompilot/jetlink ~/jetlink && cd ~/jetlink
 make -C macos app                            # builds macos/build/Jetlink.app
-uv venv && uv pip install --python .venv -e . onnx onnxruntime opencv-python
+uv venv && uv pip install --python .venv -e . onnx onnxruntime opencv-python pycapnp zstandard
 ```
 
 Copy `macos/build/Jetlink.app` to **Applications** if you like; the commands
@@ -172,9 +177,9 @@ quit Jetlink and open it listening on the network:
 ~/jetlink/macos/build/Jetlink.app/Contents/MacOS/Jetlink -developerTransport tcp -tcpPort 5599
 ```
 
-You need the drive's segment folders (each with `fcamera.hevc` and
-`ecamera.hevc`, from the comma's `/data/media/0/realdata`) and a driving model
-ONNX ([catalog](models.md)). In a second terminal, from the checkout, play the
+You need the drive's segment folders (each with `fcamera.hevc`,
+`ecamera.hevc` and `rlog.zst`, from the comma's `/data/media/0/realdata`) and a
+driving model ONNX ([catalog](models.md)). In a second terminal, from the checkout, play the
 drive into the app and watch it in **Diorama**:
 
 ```bash
@@ -185,8 +190,8 @@ cd ~/jetlink
 
 - **Stop:** Ctrl-C stops the replay. Quit Jetlink (Ctrl-C in its terminal) and
   open it normally to go back to USB.
-- `--start`, `--seconds`, `--loop` and `--rpy` work as on
-  [Linux](#feed-it-a-replay).
+- `--start`, `--seconds` and `--loop` work as on [Linux](#feed-it-a-replay),
+  and the calibration comes from the drive's `rlog.zst` the same way.
 
 ### From a terminal
 
@@ -243,9 +248,10 @@ uv pip uninstall --python .venv onnxruntime && uv pip install --python .venv "on
 ```
 
 The viewer opens in your browser, with play, pause and seek (Space plays and
-pauses). `--start` and `--seconds` pick a part of the drive, `--rpy` the
-camera's calibration as for a replay, and `--device cuda`, `coreml` or `cpu`
-where it runs.
+pauses). The segment folders need their `rlog.zst`, as for a replay.
+`--start` and `--seconds` pick a part of the drive, and `--device cuda`,
+`coreml` or `cpu` where it runs. `run` segments both cameras, so the viewer
+switches between them with the view, as live.
 
 On a Mac, `run` takes the ONNX model, not the app's CoreML one. Fetch it as on
 Linux:
@@ -272,8 +278,8 @@ uvx --from huggingface_hub hf download ernestchu/jetlink-diorama \
   model is unsure.
 - **When the car ahead changes lanes,** it disappears for a second or two,
   until the model settles on the next car.
-- **A narrow view:** the model sees only the narrow camera, so curbs, sidewalks
-  and crosswalks to the side fill in patchily.
+- **Around a switch of view,** a segmentation from the other camera may be
+  dropped, a tenth of a second without new detail.
 - All lane lines are white.
 
 ## Credits

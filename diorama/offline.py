@@ -11,8 +11,10 @@ folder the Diorama page plays beside the drive's own footage:
     footage.mp4     the road camera over the same frames, for the side-by-side
 
 The frames are what a comma would send a jetlink server, warped and packed the
-same way, and the models see what they would see live, so a drive tried
-here looks as it would from the car.
+same way with the calibration the comma logged, and the models see what they
+would see live, so a drive tried here looks as it would from the car. Live,
+the server segments the narrow frame in the road view and the wide frame in
+bird's-eye; here both are segmented, and the page takes the one for its view.
 """
 from __future__ import annotations
 
@@ -28,7 +30,6 @@ from diorama.driving import DrivingModel, providers
 from diorama.outputs import DRIVE_FIELDS
 from diorama.route import FPS, Route
 
-CAMERA_HEIGHT = 1.22  # openpilot's
 WARMUP = 100  # frames of history the driving model gets before the first one kept
 
 
@@ -41,18 +42,19 @@ class Models:
     prov = providers(device)
     self.seg = ort.InferenceSession(str(folder / self.meta['seg']['file']), providers=prov)
 
-  def segment(self, narrow: np.ndarray):
-    return self.seg.run(None, {'frame': narrow[None].astype(np.float16)})
+  def segment(self, frame: np.ndarray):
+    """One packed frame, narrow or wide."""
+    return self.seg.run(None, {'frame': frame[None].astype(np.float16)})
 
 
-def drive_meta(model: DrivingModel, models: Models, height: float, rpy, route: Route, start: int) -> dict:
-  m = models.meta
+def drive_meta(model: DrivingModel, models: Models, route: Route, start: int) -> dict:
+  m, cal = models.meta, route.calibration
   return {
-    'version': 1, 'fps': FPS, 'frame': m['frame'], 'height': height, 'live': False,
+    'version': 1, 'fps': FPS, 'frame': m['frame'], 'wide': dict(packets.wide_frame(m['frame']), from_device=list(cal.wide_from_device)),
+    'height': cal.height, 'live': False,
     'drive': [[name, model.slices[name].stop - model.slices[name].start] for name in DRIVE_FIELDS if name in model.slices],
     'seg': {k: m['seg'][k] for k in ('labels', 'road_class', 'things', 'ds')},
-    'source': {'route': route.segments[0].name.rsplit('--', 1)[0], 'start': start, 'rpy': list(map(float, rpy)),
-               'camera': list(route.size)},
+    'source': {'route': route.segments[0].name.rsplit('--', 1)[0], 'start': start, 'rpy': list(cal.rpy), 'camera': list(route.size)},
   }
 
 
@@ -65,14 +67,11 @@ def footage_encoder(path: Path, size: tuple[int, int], width: int = 960) -> subp
 
 
 def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: float = 0.0, seconds: float | None = None,
-        device: str = 'auto', rpy: list[float] | None = None, seg_every: int = 2,
-        rhd: bool = False) -> Path:
-  route = Route.open(paths)
+        device: str = 'auto', seg_every: int = 2, rhd: bool = False) -> Path:
+  route = Route.open(paths)  # with the calibration the comma logged, or refused
   print(f'{len(route.segments)} segments of {route.segments[0].name.rsplit("--", 1)[0]}, camera {route.size[0]}x{route.size[1]}')
   model = DrivingModel(onnx, device, rhd)
   models = Models(models_dir, device)
-  # the camera as given (radians), else as mounted: never estimated from the drive
-  rpy, height = np.asarray(rpy if rpy is not None else (0.0, 0.0, 0.0), float), CAMERA_HEIGHT
   start = int(round(start_s * FPS))
   count = None if seconds is None else int(round(seconds * FPS))
   first = max(start - WARMUP, 0)
@@ -84,8 +83,8 @@ def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: floa
   n = 0
   t0 = time.perf_counter()
   with open(out / 'drive.diorama', 'wb') as fh:
-    packets.write(fh, packets.meta(drive_meta(model, models, height, rpy, route, start)))
-    for k, narrow_yuv, warped in route.warped(rpy, first, None if count is None else start - first + count):
+    packets.write(fh, packets.meta(drive_meta(model, models, route, start)))
+    for k, narrow_yuv, warped in route.warped(first, None if count is None else start - first + count):
       t = time.perf_counter()
       vector = model.step(warped)
       model_s = time.perf_counter() - t
@@ -97,11 +96,12 @@ def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: floa
       values = np.concatenate([vector[model.slices[name]] for name in DRIVE_FIELDS if name in model.slices])
       packets.write(fh, packets.drive(frame, frame / FPS, 1000 * model_s, values))
       if frame % seg_every == 0:
-        t = time.perf_counter()
-        qmap, label, score = models.segment(warped[0])
-        seg_s = time.perf_counter() - t
-        timing['seg'] += seg_s
-        packets.write(fh, packets.seg(frame, 1000 * seg_s, qmap, label, score))
+        for camera in (0, 1):  # narrow, wide
+          t = time.perf_counter()
+          qmap, label, score = models.segment(warped[camera])
+          seg_s = time.perf_counter() - t
+          timing['seg'] += seg_s / 2
+          packets.write(fh, packets.seg(frame, 1000 * seg_s, qmap, label, score, wide=camera == 1))
       n += 1
       if n % 200 == 0:
         print(f'{n / FPS:.0f} s of drive in {time.perf_counter() - t0:.0f} s', flush=True)

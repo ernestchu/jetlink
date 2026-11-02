@@ -7,7 +7,12 @@ import Synchronization
 /// from the frames the comma sends anyway.
 ///
 /// Every frame the server answers, the stage takes the driving model's
-/// outputs and, every other frame, the warped narrow image (`FrameObserver`).
+/// outputs and, every other frame, a warped image (`FrameObserver`): the
+/// narrow camera's in the road view, the wide camera's in bird's-eye, which
+/// shows the road close around the car the narrow one sees only ahead. The
+/// stage keeps the scene the watchers make, to know which view they show.
+/// It places what the cameras saw with the comma's own calibration, from its
+/// hello (`cameraCalibrated`), and waits for one: nothing is assumed.
 /// On threads of its own it runs the segmentation on that image, and hands
 /// the messages of docs/diorama-internals.md to whoever watches: the web page's event stream, the Mac app's view. The page does
 /// the rest in the browser.
@@ -95,6 +100,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   private var drives: [(frame: UInt32, values: [Float], ms: Float)] = []
   private var image: [UInt8] = []
   private var imageFrame: UInt32?
+  private var imageWide = false
   private var modelSha = ""
   private var fields: [(name: String, count: Int)] = []
   private var ranges: [Range<Int>] = []
@@ -107,7 +113,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   private let watchLock = NSCondition()
   private var watchers: [ObjectIdentifier: Watcher] = [:]
   private var stopped = false
-  private var status = "idle"
+  private var status = DioramaStage.uncalibrated
 
   // The models, prepared on a thread of their own: a first TensorRT build
   // takes minutes, and the drive messages keep flowing meanwhile.
@@ -124,10 +130,17 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
 
   // The runners, one thread per engine, and the frame waiting for one.
   private let runLock = NSCondition()
-  private var waiting: (frame: [UInt8], id: UInt32)?
+  private var waiting: (frame: [UInt8], id: UInt32, wide: Bool)?
   private var busy = 0
   /// The newest frame whose segmentation went out: one that finishes after a newer one is dropped.
   private var lastSeg: UInt32?
+
+  // The scene the watchers make of the messages, kept here too: while it is in bird's-eye, the wide frame is segmented.
+  private let sceneLock = NSLock()
+  private let scene = DioramaScene()
+  private let birdsEye = Atomic<Bool>(false)
+  /// The comma's calibration of its cameras, as its hello gave it.
+  private var calibration: CameraCalibration?
 
   public init(models: Models, limits: Limits = Limits(), makeEngine: @escaping EngineFactory) {
     self.models = models
@@ -223,14 +236,17 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
 
   // MARK: FrameObserver
 
-  public func frameServed(frameID: UInt32, narrow: UnsafeRawBufferPointer, outputs: UnsafeBufferPointer<Float>, spec: ModelSpec, totalUs: UInt32) {
+  public func frameServed(
+    frameID: UInt32, narrow: UnsafeRawBufferPointer, wide: UnsafeRawBufferPointer, outputs: UnsafeBufferPointer<Float>, spec: ModelSpec,
+    totalUs: UInt32
+  ) {
     if totalUs > limits.slowFrameUs {
       pausedUntil.store(DispatchTime.now().uptimeNanoseconds + UInt64(limits.backOff * 1e9), ordering: .relaxed)
     }
     // a try, not a wait: a frame never queues behind the stage (it may miss this one's image)
     guard frameLock.try() else { return }
     defer { frameLock.unlock() }
-    guard watching > 0 else { return }
+    guard watching > 0, calibration != nil else { return }
     if spec.sha256 != modelSha {
       modelSha = spec.sha256
       let found = DioramaPackets.driveFields.compactMap { name in spec.outputSlices.first { $0.name == name }.map { (name, $0.range(in: outputs.count)) } }
@@ -244,11 +260,31 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     drives.append((frameID, values, Float(totalUs) / 1000))
     if drives.count > 40 { drives.removeFirst(drives.count - 40) }
     if frameID % segEvery.load(ordering: .relaxed) == 0 {
-      image = Array(narrow.bindMemory(to: UInt8.self))
+      imageWide = birdsEye.load(ordering: .relaxed)
+      image = Array((imageWide ? wide : narrow).bindMemory(to: UInt8.self))
       imageFrame = frameID
     }
     wake.signal()
   }
+
+  public func cameraCalibrated(_ calibration: CameraCalibration?) {
+    frameLock.lock()
+    guard calibration != self.calibration else {
+      frameLock.unlock()
+      return
+    }
+    self.calibration = calibration
+    // the meta again, with it; before the first frame, a watcher's own meta has it
+    if !fields.isEmpty { fieldsChanged = true }
+    frameLock.unlock()
+    if calibration == nil {
+      setStatus(Self.uncalibrated)
+    } else if state == Self.uncalibrated {
+      setStatus("idle")
+    }
+  }
+
+  static let uncalibrated = "waiting: the comma sent no camera calibration (not calibrated yet, or older jetlink on it)"
 
   // MARK: the stage's thread
 
@@ -266,7 +302,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       let paused = DispatchTime.now().uptimeNanoseconds < pausedUntil.load(ordering: .relaxed)
       let seen: [UInt8]? = imageFrame != nil ? image : nil
       let frame = paused ? nil : seen
-      let frameID = imageFrame ?? 0
+      let frameID = imageFrame ?? 0, wide = imageWide
       imageFrame = nil
       let announce = fieldsChanged
       fieldsChanged = false
@@ -274,9 +310,15 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       frameLock.unlock()
       guard anyone else { continue }
 
-      if announce { broadcast(DioramaPackets.meta(metaInfo())) }
+      if announce {
+        let meta = DioramaPackets.meta(metaInfo())
+        broadcast(meta)
+        follow(meta)
+      }
       for d in pending {
-        broadcast(DioramaPackets.drive(frame: d.frame, seconds: Float(d.frame) / 20, modelMs: d.ms, values: d.values))
+        let drive = DioramaPackets.drive(frame: d.frame, seconds: Float(d.frame) / 20, modelMs: d.ms, values: d.values)
+        broadcast(drive)
+        follow(drive)
       }
       // what the models see, paused or not, for a debug view that asked
       if let seen { showSeen(seen, frameID) }
@@ -288,7 +330,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       // to a runner that is free, within the rate's number at once; with none free, the frame is missed
       runLock.lock()
       if busy < min(ready, inFlight.load(ordering: .relaxed)) {
-        waiting = (frame, frameID)
+        waiting = (frame, frameID, wide)
         busy += 1
         runLock.signal()
       }
@@ -301,7 +343,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     while true {
       runLock.lock()
       while waiting == nil && !isStopped { runLock.wait() }
-      guard let (frame, frameID) = waiting else {
+      guard let (frame, frameID, wide) = waiting else {
         runLock.unlock()
         return
       }
@@ -313,17 +355,21 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       engineLock.unlock()
       setStatus("running")
       let started = DispatchTime.now().uptimeNanoseconds
-      let message = run(engine, frame, { segMessage($0, frameID, $1) })
+      let message = run(engine, frame, { segMessage($0, frameID, $1, wide: wide) })
       if limits.duty < 1 {
         let took = DispatchTime.now().uptimeNanoseconds - started
         restUntil.store(DispatchTime.now().uptimeNanoseconds + UInt64(Double(took) * (1 / max(limits.duty, 0.05) - 1)), ordering: .relaxed)
       }
       runLock.lock()
       busy -= 1
-      let newest = lastSeg.map { frameID > $0 } ?? true
+      // newer, or a new session's frames counting from 0 again (as the scene, a jump back of more than 40)
+      let newest = lastSeg.map { frameID > $0 || frameID + 40 < $0 } ?? true
       if newest && message != nil { lastSeg = frameID }
       runLock.unlock()
-      if newest, let message { broadcast(message) }
+      if newest, let message {
+        broadcast(message)
+        follow(message)
+      }
     }
   }
 
@@ -425,14 +471,15 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     return UnsafeBufferPointer(start: p.assumingMemoryBound(to: Float.self), count: spec.count)
   }
 
-  private func segMessage(_ engine: any Engine, _ frame: UInt32, _ ms: Float) -> Data? {
+  private func segMessage(_ engine: any Engine, _ frame: UInt32, _ ms: Float, wide: Bool) -> Data? {
     guard let qmap = floats(engine, "qmap"), let label = floats(engine, "label"), let score = floats(engine, "score"),
       let shape = engine.outputs["qmap"]?.shape, shape.count >= 2
     else {
       log.error("the segmentation graph has no float qmap, label and score")
       return nil
     }
-    return DioramaPackets.seg(frame: frame, ms: ms, qmap: qmap, width: shape[shape.count - 1], height: shape[shape.count - 2], label: label, score: score)
+    return DioramaPackets.seg(
+      frame: frame, ms: ms, qmap: qmap, width: shape[shape.count - 1], height: shape[shape.count - 2], label: label, score: score, wide: wide)
   }
 
   /// The model input to the watchers that want it. A watcher this far
@@ -445,6 +492,14 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     let message = DioramaPackets.input(frame: frame, packed: packed)
     for w in wanting { w.queue.append(message) }
     watchLock.broadcast()
+  }
+
+  /// A message the watchers were sent, into the stage's own scene: is it in bird's-eye now?
+  private func follow(_ message: Data) {
+    sceneLock.lock()
+    defer { sceneLock.unlock() }
+    scene.push(DioramaMessage(message))
+    birdsEye.store(scene.state.map { !$0.viewWhy.isEmpty } ?? false, ordering: .relaxed)
   }
 
   private func broadcast(_ message: Data) {
@@ -482,9 +537,18 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   private func metaInfo() -> [String: Any] {
     frameLock.lock()
     let drive = fields.map { [$0.name, $0.count] as [Any] }
+    let calibration = self.calibration
     frameLock.unlock()
-    var info: [String: Any] = ["version": 1, "fps": 20, "live": true, "height": 1.22, "drive": drive]
+    var info: [String: Any] = ["version": 1, "fps": 20, "live": true, "drive": drive]
+    if let calibration { info["height"] = calibration.height }
     for key in ["frame", "seg"] { if let v = models.meta[key] { info[key] = v } }
+    // the wide frame as the comma warps it, openpilot's sbigmodel: half the narrow's focal length, its horizon
+    // halfway down from the narrow's (packets.wide_frame); and the wide camera's angles from the device
+    if let calibration, let f = models.meta["frame"] as? [String: Any], let fl = (f["f"] as? NSNumber)?.doubleValue,
+      let h = (f["h"] as? NSNumber)?.doubleValue, let cy = (f["cy"] as? NSNumber)?.doubleValue
+    {
+      info["wide"] = f.merging(["f": fl / 2, "cy": (h + cy) / 2, "from_device": calibration.wideFromDevice]) { $1 }
+    }
     return info
   }
 

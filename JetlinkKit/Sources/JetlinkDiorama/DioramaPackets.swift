@@ -47,11 +47,13 @@ public enum DioramaPackets {
 
   /// The seg graph's outputs: the query map (one float per pixel, 255 for
   /// none) as run-length bytes, and each query's class (255 when dropped) and score.
+  /// `S` for a segmentation of the narrow frame, `W` of the wide (meta's `wide`), the same otherwise.
   public static func seg(
-    frame: UInt32, ms: Float, qmap: UnsafeBufferPointer<Float>, width: Int, height: Int, label: UnsafeBufferPointer<Float>, score: UnsafeBufferPointer<Float>
+    frame: UInt32, ms: Float, qmap: UnsafeBufferPointer<Float>, width: Int, height: Int, label: UnsafeBufferPointer<Float>, score: UnsafeBufferPointer<Float>,
+    wide: Bool = false
   ) -> Data {
     var data = Data(capacity: 15 + 2 * label.count + 4096)
-    data.append(UInt8(ascii: "S"))
+    data.append(UInt8(ascii: wide ? "W" : "S"))
     data.appendLE(frame)
     data.appendLE(ms.bitPattern)
     data.appendLE(UInt16(width))
