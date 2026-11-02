@@ -68,6 +68,10 @@ the numbers.
 - The models run only while a page, the Mac view or an app's Diorama tab is open.
 - They pause for 3 s after any driving frame slower than 40 ms
   (`--diorama-pause-ms`), since they share the GPU with the driving model.
+- They segment every other frame (10 Hz). `--diorama-every-frame` segments
+  every frame (20 Hz), for about twice the GPU time; `--diorama-in-flight 2`
+  runs two at once, for a GPU too slow to do one per frame alone. The Mac
+  app's **Segment every frame (20 Hz)** setting is both.
 
 ## Export the model
 
@@ -198,6 +202,16 @@ folder's `diorama/`. A folder without the CoreML package runs the ONNX graph
 through onnxruntime's CoreML provider instead: slower, and its first compile
 takes a few minutes.
 
+**Segment every frame (20 Hz)**, in **Settings > General > Diorama**, runs
+the segmentation on every frame instead of every other one. It is off by
+default, and takes effect at once. One run takes about 56 ms on an M5 Pro, too
+long for every frame, but two at once on the GPU, each on an engine of its own,
+finish one every 39 ms (`Limits.everyFrame`). Each frame's own run then takes
+about 80 ms, so the **Segmentation** timing reads about 80 ms while
+**Perception** reads 20 Hz. The driving model, on the Neural Engine, kept its
+13.6 ms. The GPU stays nearly fully busy while Diorama is shown, and the model
+takes twice the memory.
+
 **Model input**, beside the timings, shows the frame the model sees with its
 segmentation over it, as on the [web page](#live-on-a-jetson-or-linux-pc).
 
@@ -310,6 +324,7 @@ frame times beside it have not been measured on an iPhone yet.
 | RTX 4090, onnxruntime CUDA | 23 ms | `python -m diorama run` |
 | CPU (onnxruntime) | 685 ms | works, at a few frames a second |
 | M5 Pro Mac, native CoreML on the GPU | 53 ms | the app (`--coreml`). Query map matches the ONNX graph on 99.9% of pixels |
+| M5 Pro Mac, native CoreML on the GPU, two at once | 38.9 ms a frame (25.7 Hz), each run about 80 ms | the app's **Segment every frame (20 Hz)** |
 | M5 Pro Mac, onnxruntime CoreML on the GPU | 185 ms | the ONNX graph: about 5 Hz. First compile about 2 minutes |
 | M5 Pro Mac, onnxruntime CPU | 275 ms | |
 | Jetson Orin | not measured yet | |

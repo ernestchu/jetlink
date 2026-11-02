@@ -233,6 +233,8 @@ stop any server using the same cache first.
 | `--status-port P` | 0 (off) | Serve the [web page](control-protocol.md#the-web-page) on port P. |
 | `--diorama DIR` | off | Draw the drive on the web page's `/diorama/`, from the models in DIR ([Diorama](diorama.md)). |
 | `--diorama-pause-ms MS` | 40 | Diorama pauses its models for 3 s after a driving frame slower than this; 0 never pauses. |
+| `--diorama-every-frame` | off | Diorama segments every frame (20 Hz) instead of every other frame (10 Hz), for about twice the GPU time. |
+| `--diorama-in-flight N` | 1 | Diorama's segmentations run at once, each on an engine of its own. 2 keeps busy a GPU that idles between runs, as a Mac's does (with `--diorama-every-frame`, what the Mac app's 20 Hz setting runs), at twice the memory. |
 | `--web-auth FILE` | none | The web page's password file. When it is there, the page asks for the password and has the setup and the models; without the flag or the file, it shows the status only. |
 | `--poweroff` | off | Linux: power the machine off when the comma asks (its battery-protection shutdown). Without it the comma is told yes and the machine stays up. |
 | `--no-preload` | off | Do not load the engine loaded last until a comma asks for it. |

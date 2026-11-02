@@ -8,7 +8,7 @@ import Synchronization
 ///
 /// Every frame the server answers, the stage takes the driving model's
 /// outputs and, every other frame, the warped narrow image (`FrameObserver`).
-/// On a thread of its own it runs the segmentation on that image, and hands
+/// On threads of its own it runs the segmentation on that image, and hands
 /// the messages of docs/diorama.md to whoever watches: the web page's event stream, the Mac app's view. The page does
 /// the rest in the browser.
 ///
@@ -20,6 +20,12 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   public struct Limits: Sendable {
     /// Segment every this many frames (10 Hz).
     public var segEvery: UInt32 = 2
+    /// Segmentations run at once, each on an engine of its own. One leaves
+    /// the GPU idle between runs; two keep a Mac's busy enough to segment
+    /// every frame (20 Hz), at twice the memory.
+    public var inFlight = 1
+    /// Every frame, two at once: 20 Hz where the GPU keeps up.
+    public static let everyFrame: (segEvery: UInt32, inFlight: Int) = (1, 2)
     /// A driving frame this slow pauses the models.
     public var slowFrameUs: UInt32 = 40_000
     public var backOff: TimeInterval = 3
@@ -78,6 +84,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   }
 
   public let models: Models
+  /// As the stage was made; `segment(every:inFlight:)` changes the rate after.
   public let limits: Limits
   private let makeEngine: EngineFactory
   private let log = ServerLog(category: "diorama")
@@ -105,17 +112,37 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
   // The models, prepared on a thread of their own: a first TensorRT build
   // takes minutes, and the drive messages keep flowing meanwhile.
   private let engineLock = NSLock()
-  private var seg: (any Engine)?
+  private var engines: [any Engine] = []
   private var preparing = false
   private var loadFailed = false
   private let half: [UInt16] = (0..<256).map { DioramaStage.float16Bits(Float($0)) }
-  /// Until when the models rest after a run, by `Limits.duty`: the stage's thread's own.
-  private var restUntil: UInt64 = 0
+  /// Until when the models rest after a run, by `Limits.duty`, in uptime nanoseconds.
+  private let restUntil = Atomic<UInt64>(0)
+  /// The rate now: segment every this many frames, this many at once.
+  private let segEvery: Atomic<UInt32>
+  private let inFlight: Atomic<Int>
+
+  // The runners, one thread per engine, and the frame waiting for one.
+  private let runLock = NSCondition()
+  private var waiting: (frame: [UInt8], id: UInt32)?
+  private var busy = 0
+  /// The newest frame whose segmentation went out: one that finishes after a newer one is dropped.
+  private var lastSeg: UInt32?
 
   public init(models: Models, limits: Limits = Limits(), makeEngine: @escaping EngineFactory) {
     self.models = models
     self.limits = limits
     self.makeEngine = makeEngine
+    segEvery = Atomic(max(limits.segEvery, 1))
+    inFlight = Atomic(max(limits.inFlight, 1))
+  }
+
+  /// Segment every `every` frames, `inFlight` at once: `Limits.everyFrame`
+  /// for 20 Hz, or back to 10 Hz. Engines for more at once are made as
+  /// needed; ones no longer needed stay loaded until the stage stops.
+  public func segment(every: UInt32, inFlight: Int) {
+    segEvery.store(max(every, 1), ordering: .relaxed)
+    self.inFlight.store(max(inFlight, 1), ordering: .relaxed)
   }
 
   public func start() {
@@ -132,6 +159,9 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     watchLock.broadcast()
     watchLock.unlock()
     wake.signal()
+    runLock.lock()
+    runLock.broadcast()
+    runLock.unlock()
   }
 
   /// What the stage is doing, for a page or a view.
@@ -213,7 +243,7 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
     for r in ranges { values.append(contentsOf: outputs[r]) }
     drives.append((frameID, values, Float(totalUs) / 1000))
     if drives.count > 40 { drives.removeFirst(drives.count - 40) }
-    if frameID % limits.segEvery == 0 {
+    if frameID % segEvery.load(ordering: .relaxed) == 0 {
       image = Array(narrow.bindMemory(to: UInt8.self))
       imageFrame = frameID
     }
@@ -252,32 +282,70 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       if let seen { showSeen(seen, frameID) }
       // a pause does not stop a build, and must not hide why the models never run
       if paused && !preparingOrFailed { setStatus("paused: the driving model ran slow") }
-      guard let frame, DispatchTime.now().uptimeNanoseconds >= restUntil, let seg = engine() else { continue }
-      setStatus("running")
-      let started = DispatchTime.now().uptimeNanoseconds
-      if let message = run(seg, frame, { segMessage($0, frameID, $1) }) {
-        broadcast(message)
+      guard let frame, DispatchTime.now().uptimeNanoseconds >= restUntil.load(ordering: .relaxed) else { continue }
+      let ready = enginesReady()
+      guard ready > 0 else { continue }
+      // to a runner that is free, within the rate's number at once; with none free, the frame is missed
+      runLock.lock()
+      if busy < min(ready, inFlight.load(ordering: .relaxed)) {
+        waiting = (frame, frameID)
+        busy += 1
+        runLock.signal()
       }
-      if limits.duty < 1 {
-        let took = DispatchTime.now().uptimeNanoseconds - started
-        restUntil = DispatchTime.now().uptimeNanoseconds + UInt64(Double(took) * (1 / max(limits.duty, 0.05) - 1))
-      }
+      runLock.unlock()
     }
   }
 
-  /// The segmentation once it is ready; until then nil, and the first call starts preparing it.
-  private func engine() -> (any Engine)? {
+  /// One runner, on engine `index`: segments the frames handed to it until the stage stops.
+  private func runner(_ index: Int) {
+    while true {
+      runLock.lock()
+      while waiting == nil && !isStopped { runLock.wait() }
+      guard let (frame, frameID) = waiting else {
+        runLock.unlock()
+        return
+      }
+      waiting = nil
+      runLock.unlock()
+
+      engineLock.lock()
+      let engine = engines[index]
+      engineLock.unlock()
+      setStatus("running")
+      let started = DispatchTime.now().uptimeNanoseconds
+      let message = run(engine, frame, { segMessage($0, frameID, $1) })
+      if limits.duty < 1 {
+        let took = DispatchTime.now().uptimeNanoseconds - started
+        restUntil.store(DispatchTime.now().uptimeNanoseconds + UInt64(Double(took) * (1 / max(limits.duty, 0.05) - 1)), ordering: .relaxed)
+      }
+      runLock.lock()
+      busy -= 1
+      let newest = lastSeg.map { frameID > $0 } ?? true
+      if newest && message != nil { lastSeg = frameID }
+      runLock.unlock()
+      if newest, let message { broadcast(message) }
+    }
+  }
+
+  private var isStopped: Bool {
+    watchLock.lock()
+    defer { watchLock.unlock() }
+    return stopped
+  }
+
+  /// How many engines are ready; the first call, and one asking for more at once than there are, starts
+  /// preparing them.
+  private func enginesReady() -> Int {
     engineLock.lock()
     defer { engineLock.unlock() }
-    if let seg { return seg }
-    if !preparing && !loadFailed {
+    if engines.count < inFlight.load(ordering: .relaxed) && !preparing && !loadFailed {
       preparing = true
       let thread = Thread { [weak self] in self?.prepare() }
       thread.name = "jetlink-diorama-prepare"
       thread.qualityOfService = .utility
       thread.start()
     }
-    return nil
+    return engines.count
   }
 
   private func prepare() {
@@ -286,18 +354,37 @@ public final class DioramaStage: FrameObserver, @unchecked Sendable {
       { stage, frac, msg in if frac == 0 || frac == 1 { log.info("\(name): \(stage), \(msg)") } }
     }
     do {
-      setStatus("preparing the segmentation model; the first time takes minutes")
-      let seg = try makeEngine(models.seg, "seg", progress("segmentation"))
+      // engines until there are as many as the rate runs at once; a second is the first's compile, loaded again
+      while true {
+        engineLock.lock()
+        let have = engines.count
+        engineLock.unlock()
+        if have >= inFlight.load(ordering: .relaxed) || isStopped { break }
+        if have == 0 { setStatus("preparing the segmentation model; the first time takes minutes") }
+        let seg = try makeEngine(models.seg, "seg", progress("segmentation"))
+        engineLock.lock()
+        engines.append(seg)
+        engineLock.unlock()
+        let thread = Thread { [weak self] in self?.runner(have) }
+        thread.name = "jetlink-diorama-run-\(have)"
+        thread.qualityOfService = .utility
+        thread.start()
+        log.info(have == 0 ? "segmentation ready" : "segmentation engine \(have + 1) ready, for \(have + 1) at once")
+      }
       engineLock.lock()
-      self.seg = seg
       preparing = false
       engineLock.unlock()
-      log.info("segmentation ready")
     } catch {
       engineLock.lock()
       loadFailed = true
       preparing = false
+      let have = engines.count
       engineLock.unlock()
+      if have > 0 {
+        // the ones there are keep running, fewer at once
+        log.warning("no segmentation engine \(have + 1), so \(have) at once: \(error)")
+        return
+      }
       log.error("cannot run the models: \(error)")
       // the page has one line for it: the graphs by name, the folder is in the log
       setStatus("off: " + "\(error)".replacingOccurrences(of: models.folder.path + "/", with: ""))

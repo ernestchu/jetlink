@@ -48,6 +48,7 @@ final class AppSettings {
     static let keepAwakeLidClosed = "keepAwakeLidClosed"
     static let dioramaFolder = "dioramaFolder"
     static let dioramaShare = "dioramaShare"
+    static let dioramaEveryFrame = "dioramaEveryFrame"
   }
 
   @ObservationIgnored private let defaults: UserDefaults
@@ -90,6 +91,12 @@ final class AppSettings {
     didSet { defaults.set(dioramaShare, forKey: Key.dioramaShare) }
   }
 
+  /// Segment every frame (20 Hz), two at once on the GPU, instead of every
+  /// other frame (10 Hz): about twice the GPU time and the model's memory.
+  var dioramaEveryFrame: Bool {
+    didSet { defaults.set(dioramaEveryFrame, forKey: Key.dioramaEveryFrame) }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
@@ -116,6 +123,7 @@ final class AppSettings {
       dioramaFolder = AppSettings.applicationSupportDirectory.appending(path: "diorama")
     }
     dioramaShare = defaults.bool(forKey: Key.dioramaShare)
+    dioramaEveryFrame = defaults.bool(forKey: Key.dioramaEveryFrame)
   }
 
   nonisolated static let defaultTCPPort = 5599

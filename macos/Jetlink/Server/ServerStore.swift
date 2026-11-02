@@ -92,6 +92,7 @@ final class ServerStore: ServerControlling {
         if let self, let embedded = self.embedded, self.diorama == nil { self.attachDiorama(embedded) }
       }
       watchDioramaShare()
+      watchDioramaRate()
     }
   }
 
@@ -191,8 +192,10 @@ final class ServerStore: ServerControlling {
     let engines = settings.cacheDirectory.appending(path: "diorama", directoryHint: .isDirectory)
     do {
       let models = try DioramaStage.Models(folder: folder, coreml: true)
+      var limits = DioramaStage.Limits()
+      (limits.segEvery, limits.inFlight) = Self.dioramaRate(everyFrame: settings.dioramaEveryFrame)
       let stage = DioramaStage(
-        models: models,
+        models: models, limits: limits,
         makeEngine: DioramaStage.coreMLFactory(cache: engines) { onnx, name, _ in
           try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory))
         })
@@ -204,6 +207,21 @@ final class ServerStore: ServerControlling {
       broadcaster?.setStage(stage)
     } catch {
       dioramaProblem = "\(error)"
+    }
+  }
+
+  /// 20 Hz, two at once, or 10 Hz, one at a time.
+  private static func dioramaRate(everyFrame: Bool) -> (segEvery: UInt32, inFlight: Int) {
+    everyFrame ? DioramaStage.Limits.everyFrame : (DioramaStage.Limits().segEvery, DioramaStage.Limits().inFlight)
+  }
+
+  /// The segmentation's rate follows the setting while the server runs.
+  private func watchDioramaRate() {
+    withObservationTracking {
+      let rate = Self.dioramaRate(everyFrame: settings.dioramaEveryFrame)
+      diorama?.segment(every: rate.segEvery, inFlight: rate.inFlight)
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.watchDioramaRate() }
     }
   }
 

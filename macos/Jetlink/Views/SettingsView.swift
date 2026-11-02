@@ -94,6 +94,15 @@ struct GeneralSettingsView: View {
           .fixedSize(horizontal: false, vertical: true)
         }
         VStack(alignment: .leading, spacing: 4) {
+          Toggle("Segment every frame (20 Hz)", isOn: $settings.dioramaEveryFrame)
+          Text(
+            "Runs the segmentation model on every frame, two at once on the GPU, instead of every other frame (10 Hz). The road and the lead follow the drive more closely, but the GPU stays nearly fully busy while Diorama is shown, and the model takes twice the memory. Needs a GPU that keeps up, as an M5 Pro's does."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+        VStack(alignment: .leading, spacing: 4) {
           Toggle("Show on iPhones nearby", isOn: $settings.dioramaShare)
           Text(
             "An iPhone with Jetlink can watch the drive in its Diorama tab, over Wi-Fi peer to peer: it needs no network in common with the Mac, so it can be joined to the car for CarPlay. Any iPhone nearby running Jetlink can watch while this is on; the Diorama view lists them."

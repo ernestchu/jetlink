@@ -278,6 +278,94 @@ struct DioramaStageTests {
     #expect(seg.runs == 0)
     #expect(stage.state.hasPrefix("paused"))
   }
+  @Test("Every frame, two at once: a second engine, every frame segmented, never more than two running, in frame order")
+  func everyFrame() throws {
+    let running = RunCount(), built = Mutex(0)
+    var limits = DioramaStage.Limits()
+    (limits.segEvery, limits.inFlight) = DioramaStage.Limits.everyFrame
+    let stage = DioramaStage(models: try models(), limits: limits) { _, _, _ in
+      built.withLock { $0 += 1 }
+      return try SlowModel(seconds: 0.08, running: running)
+    }
+    stage.start()
+    defer { stage.stop() }
+    let w = stage.watch()
+    // a frame every 50 ms, with each run taking 80: one engine alone could not keep up
+    var got: [Data] = []
+    for f in UInt32(0)..<40 {
+      serve(stage, frame: f)
+      Thread.sleep(forTimeInterval: 0.05)
+      got += stage.next(w, timeout: 0) ?? []
+    }
+    got += collect(stage, w, until: { _ in false })
+    let segs = got.filter { $0.first == UInt8(ascii: "S") }.map { $0[1...4].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) } }
+    #expect(built.withLock { $0 } == 2)
+    #expect(running.most == 2)
+    #expect(segs == segs.sorted() && Set(segs).count == segs.count)
+    // the first frames go by while the engines are made
+    #expect(segs.count >= 25)
+  }
+
+  @Test("Asked for every frame while running, the stage makes the second engine then")
+  func switches() throws {
+    let running = RunCount(), built = Mutex(0)
+    let stage = DioramaStage(models: try models()) { _, _, _ in
+      built.withLock { $0 += 1 }
+      return try SlowModel(seconds: 0.08, running: running)
+    }
+    stage.start()
+    defer { stage.stop() }
+    let w = stage.watch()
+    for f in UInt32(0)..<10 {
+      serve(stage, frame: f)
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    #expect(built.withLock { $0 } == 1 && running.most == 1)
+    stage.segment(every: DioramaStage.Limits.everyFrame.segEvery, inFlight: DioramaStage.Limits.everyFrame.inFlight)
+    for f in UInt32(10)..<30 {
+      serve(stage, frame: f)
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    _ = collect(stage, w)
+    #expect(built.withLock { $0 } == 2)
+    #expect(running.most == 2)
+  }
+}
+
+/// How many segmentations run at once, and the most there were.
+final class RunCount: Sendable {
+  private let state = Mutex((now: 0, most: 0))
+  var most: Int { state.withLock { $0.most } }
+  func begin() {
+    state.withLock {
+      $0.now += 1
+      $0.most = max($0.most, $0.now)
+    }
+  }
+  func end() { state.withLock { $0.now -= 1 } }
+}
+
+/// A segmentation that takes its time, counting how many run at once.
+final class SlowModel: EngineCore, @unchecked Sendable {
+  let seconds: Double
+  let running: RunCount
+
+  init(seconds: Double, running: RunCount) throws {
+    self.seconds = seconds
+    self.running = running
+    let input = TensorSpec(name: "frame", type: .float16, shape: [1, 6, 128, 256])
+    let outputs = [
+      TensorSpec(name: "qmap", type: .float, shape: [1, 128, 256]), TensorSpec(name: "label", type: .float, shape: [200]),
+      TensorSpec(name: "score", type: .float, shape: [200]),
+    ]
+    try super.init(inputs: ["frame": input], outputs: Dictionary(uniqueKeysWithValues: outputs.map { ($0.name, $0) }))
+  }
+
+  override func run() throws {
+    running.begin()
+    Thread.sleep(forTimeInterval: seconds)
+    running.end()
+  }
 }
 
 #if canImport(CoreML)

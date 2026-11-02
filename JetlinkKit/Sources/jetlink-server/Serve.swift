@@ -69,6 +69,13 @@
     var diorama: String?
     @Option(help: "Diorama pauses its models for 3 s after a driving frame slower than this many ms; 0 never pauses.")
     var dioramaPauseMs = 40.0
+    @Flag(help: "Diorama segments every frame (20 Hz) instead of every other frame (10 Hz): about twice the GPU time.")
+    var dioramaEveryFrame = false
+    @Option(
+      help: ArgumentHelp(
+        "Diorama's segmentations run at once, each on an engine of its own: 2 keeps a GPU busy that idles between runs, as a Mac's does, at twice the memory.",
+        valueName: "n"))
+    var dioramaInFlight = 1
     @Option(help: "debug, info, warning or error.")
     var logLevel = Log.Level.info
 
@@ -80,6 +87,7 @@
       // A TCP listener never sees the comma go, so nothing would say when to sleep.
       guard sleepAfter == 0 || usb else { throw ValidationError("--sleep-after needs --usb") }
       guard (0...65535).contains(statusPort) else { throw ValidationError("--status-port \(statusPort) is not a port") }
+      guard (1...4).contains(dioramaInFlight) else { throw ValidationError("--diorama-in-flight wants 1 to 4, not \(dioramaInFlight)") }
     }
 
     func run() throws {
@@ -199,6 +207,8 @@
       }
       var limits = DioramaStage.Limits()
       limits.slowFrameUs = dioramaPauseMs > 0 ? UInt32(dioramaPauseMs * 1000) : .max
+      if dioramaEveryFrame { limits.segEvery = 1 }
+      limits.inFlight = dioramaInFlight
       let stage = DioramaStage(models: models, limits: limits, makeEngine: factory)
       stage.start()
       server.host.frameObserver = stage
