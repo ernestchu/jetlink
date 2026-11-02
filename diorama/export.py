@@ -203,7 +203,9 @@ def seg_module(model_id: str = SEG_MODEL, semantic: bool = False):
       m = torch.nn.functional.interpolate(o.masks_queries_logits.float(), size, mode='bilinear', align_corners=False)[0]
       p = o.class_queries_logits[0].float().softmax(-1)[:, :-1]
       cls = torch.einsum('qc,qhw->chw', p, m.sigmoid()).argmax(0)
-      return cls.float()[None], self.classes, torch.ones_like(self.classes)
+      # computed from p, not the bare buffer: coremltools refuses a module's attribute as a graph output
+      zero = p[0] * 0
+      return cls.float()[None], zero + self.classes, zero + 1
 
   meta = {
     'model': model_id, 'labels': [labels[i] for i in range(len(labels))],
