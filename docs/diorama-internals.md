@@ -137,8 +137,9 @@ use too). Check them before you share the exported files.
 ["2021 Tesla Model Y"](https://sketchfab.com/3d-models/2021-tesla-model-y-59e2ead369984b1a85c800ff6cf6789d)
 by tonielpro520, licensed under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Diorama recolours
-it in the page's flat colours and leaves out its badges, interior, brakes and
-the frames hidden behind its body (`diorama/assets.py`, rebuilt with
+it in the page's flat colours and leaves out its badges, interior, brakes, the
+tail lamps' lenses (which would hide the lamps' own detail) and the frames
+hidden behind its body (`diorama/assets.py`, rebuilt with
 `python -m diorama assets <model.obj>`).
 
 **Rebuilding the car:** the car is `diorama-assets.bin`, made from the model

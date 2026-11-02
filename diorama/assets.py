@@ -11,8 +11,9 @@ It is "2021 Tesla Model Y" by tonielpro520
 (https://sketchfab.com/3d-models/2021-tesla-model-y-59e2ead369984b1a85c800ff6cf6789d),
 licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changed
 for Diorama: recoloured in the page's flat colours by part, and its badges,
-interior, brakes and the frames hidden behind its body left out. Its triangles
-are otherwise the model's own, at full resolution.
+interior, brakes, the tail lamps' clear and red lenses and the frames hidden
+behind its body left out. Its triangles are otherwise the model's own, at full
+resolution.
 
 To rebuild diorama-assets.bin, download the model's OBJ from that page, then (with scipy installed):
 
@@ -35,17 +36,20 @@ GLASS = np.array([0.33, 0.33, 0.35])
 TRIM = np.array([0.30, 0.30, 0.32])
 TIRE = np.array([0.22, 0.22, 0.23])
 RIM = np.array([0.40, 0.40, 0.42])
-TAIL = np.array([0.80, 0.10, 0.10])
+TAIL = np.array([0.80, 0.10, 0.10])  # the tail lamps' light strips
+TAIL_DARK = TAIL * 0.42  # the dark red inside the lamps
+HOUSING = TAIL * 0.38  # the lamps' housing, a smoked red that glows when braking, so a far lead's brake lights show
 HEAD = np.array([0.88, 0.89, 0.91])
 
 # the model's materials, and what each is in the page's colours
 PARTS = {
   'Carro_Pintura': 'body', 'Carro_Vidros2': 'glass', 'Carro_Plastico_Brilho_1': 'glass', 'Carro_Espelhos': 'glass',
   'Carro_Plastico_Brilho': 'trim', 'Carro_Plastico': 'trim', 'Carro_Metal_Preto': 'trim', 'Carro_Pneu': 'tire',
-  'Carro_Metal_Lanterna_Traseira': 'tail', 'Carro_Metal_Vermelho': 'tail', 'Carro_Metal_Vermelho_1': 'tail',
-  'Carro_Metal_Vermelho_3': 'tail', 'Carro_Vidro_Vermelho2': 'tail', 'Carro_Metal_Vermelho_2': 'reflector',
+  'Carro_Metal_Lanterna_Traseira': 'housing', 'Carro_Metal_Vermelho': 'tail', 'Carro_Metal_Vermelho_1': 'tail',
+  'Carro_Metal_Vermelho_3': 'tail_dark', 'Carro_Metal_Vermelho_2': 'reflector',
   'Carro_Metal_Farol': 'head', 'Carro_Metal_Farol_1': 'head',
-}  # left out: Carro_Cromado (the badges), and Carro_Interno, Carro_Freio and Carro_Freio_Disco (unseen behind the glass and wheels)
+}  # left out: Carro_Cromado (the badges), Carro_Interno, Carro_Freio and Carro_Freio_Disco (unseen behind the glass and
+# wheels), and Carro_Vidro_Vermelho2, the tail lamps' red lens: the page has no see-through, and drawn solid it hides them
 AXLES, WHEEL_R, TRACK = (1.47, -1.42), 0.40, 0.773  # where the model's wheels are
 
 
@@ -126,8 +130,8 @@ def car(obj):
   for mat, role in PARTS.items():
     mine = kept(P, tris[mats == mat], mat)
     if mat == 'Carro_Vidros2':
-      roles = lenses(P, mine)
-      pieces += [(mine[roles == r], r) for r in ('glass', 'tail', 'head')]
+      roles = lenses(P, mine)  # the tail lamps' clear lenses left out, as their red one is
+      pieces += [(mine[roles == r], r) for r in ('glass', 'head')]
     else:
       pieces.append((mine, role))
   for mine, role in pieces:
@@ -135,14 +139,14 @@ def car(obj):
       continue
     used, inv = np.unique(mine.ravel(), return_inverse=True)
     p, t = P[used], inv.reshape(-1, 3)
-    col = np.repeat({'body': BODY, 'glass': GLASS, 'trim': TRIM, 'tire': TIRE, 'tail': TAIL, 'reflector': TAIL * 0.8,
-                     'head': HEAD}[role][None], len(p), 0)
+    col = np.repeat({'body': BODY, 'glass': GLASS, 'trim': TRIM, 'tire': TIRE, 'tail': TAIL, 'tail_dark': TAIL_DARK,
+                     'housing': HOUSING, 'reflector': TAIL * 0.8, 'head': HEAD}[role][None], len(p), 0)
     if role == 'trim':  # the dark metal inside a wheel is its rim
       rim = np.zeros(len(p), bool)
       for ax in AXLES:
         rim |= (np.hypot(p[:, 0] - ax, p[:, 2] - WHEEL_R) < 0.8 * WHEEL_R) & (np.abs(p[:, 1]) > TRACK - 0.18)
       col[rim] = RIM
-    emis = np.full(len(p), {'body': -1.0, 'tail': 0.7, 'head': 0.5}.get(role, 0.0))
+    emis = np.full(len(p), {'body': -1.0, 'tail': 1.0, 'tail_dark': 0.5, 'housing': 0.6, 'head': 0.5}.get(role, 0.0))
     meshes.append({'pos': p, 'nrm': normals(p, t), 'col': col, 'emis': emis, 'idx': t})
   return meshes
 
