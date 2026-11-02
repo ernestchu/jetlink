@@ -40,12 +40,12 @@
   .pane { position: relative; min-height: 0; min-width: 0; background: #000; overflow: hidden; }
   video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
   canvas { width: 100%; height: 100%; display: block; }
-  .hud { position: absolute; left: 14px; top: 14px; padding: 12px 16px; border-radius: 12px; background: rgba(22, 23, 26, 0.86);
+  .hud { position: absolute; left: 14px; top: 14px; padding: 12px 34px 12px 16px; border-radius: 12px; background: rgba(22, 23, 26, 0.86);
     color: #f2f2f4; min-width: 150px; pointer-events: none; }
   .hud .speed { font-size: 44px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
   .hud .unit { font-size: 12px; color: #a9abb1; letter-spacing: 0.08em; }
   .hud .lead, .hud .mode { font-size: 12px; color: #c4c6cb; margin-top: 6px; }
-  .hud .mode { color: #8d9097; letter-spacing: 0.06em; }
+  .hud .mode { color: #8d9097; letter-spacing: 0.06em; white-space: nowrap; }  /* the view and why, clear of the accel bar */
   .hud .accel { position: absolute; right: 14px; top: 14px; bottom: 14px; width: 6px; border-radius: 3px; background: #3b3d42; }
   .hud .accel i { position: absolute; left: 0; right: 0; border-radius: 3px; }
   .waiting { position: absolute; inset: 0; display: grid; place-items: center; color: #b9bbc1; font-size: 15px; text-align: center;

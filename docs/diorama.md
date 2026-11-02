@@ -5,7 +5,7 @@ lane lines and road edges, the planned path, and the car ahead, the way the
 driving model sees them. It is all computer-drawn; no camera footage appears in
 it.
 
-<a href="images/diorama.webp"><img src="images/diorama.webp" width="100%" alt="A recorded drive in the Diorama viewer: the road camera on the left; on the right, Diorama's road view from behind the car, the planned path ending at the lead car in blue 15 m ahead, with the lane lines, road edges and sidewalks"></a>
+<a href="images/diorama.webp"><img src="images/diorama.webp" width="100%" alt="A recorded drive in the Diorama viewer, each moment beside its road camera: above, the road view from behind the car at 18 mph, the planned path ending at the lead car in blue 15 m ahead; below, the bird's-eye view at 8 mph in traffic, labelled BIRD'S-EYE · TRAFFIC, the lead 11 m ahead"></a>
 
 You can watch it:
 
