@@ -43,8 +43,24 @@ The page does the rest, in the browser, and the apps do the same natively:
 - It draws the scene in WebGL, and the apps draw it in Metal
   ([below](#the-apps-draw-it-natively)).
 
-The view sits behind the car at speed and pans to a bird's-eye view below
-20 mph.
+The view sits behind the car while it cruises, and pans to a bird's-eye view
+when the scene asks for a look around. The page names the reason beside the
+view:
+
+- **Stopped**, below 3 mph, or **slow**, below 12 mph.
+- **Turn:** the planned path bends more than 20° within the next 40 m and the
+  plan slows below 22 mph for it, or bends more than 45° (below 45 mph either
+  way). The view pans as the plan starts slowing for the corner, and stays on
+  the road through a ramp or bend taken at speed.
+- **Crossing:** a crosswalk ahead within 2.5 s (at least 10 m), going below
+  20 mph or with the plan slowing below 15 mph before it: not one driven
+  straight over.
+- **Traffic:** a lead within 15 m, below 25 mph.
+
+A cue has to hold for 0.4 s before the view pans, and the road view comes back
+only after 3 s without one and above 18 mph. Either view stays for 3 s at
+least, so it never flickers between the two. `VIEW` in diorama-engine.js holds
+the numbers.
 
 **The comma comes first:**
 

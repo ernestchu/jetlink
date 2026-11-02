@@ -132,7 +132,8 @@
     $('speed').textContent = Math.round(state.hud.v * E.MPH);
     $('lead').textContent = state.hud.lead != null ? `lead ${Math.round(state.hud.lead)} m` : '';
     const s = state.view;
-    $('mode').textContent = s < 0.02 ? 'ROAD VIEW' : s > 0.98 ? "BIRD'S-EYE" : `PANNING ${Math.round(s * 100)}%`;
+    const why = state.viewWhy ? ` · ${state.viewWhy.toUpperCase()}` : '';
+    $('mode').textContent = (s < 0.02 ? 'ROAD VIEW' : s > 0.98 ? "BIRD'S-EYE" : `PANNING ${Math.round(s * 100)}%`) + why;
     const a = E.clamp(state.hud.a, -3.2, 3.2), bar = $('accel');
     bar.style.top = `${50 - Math.max(a, 0) / 3.2 * 50}%`;
     bar.style.bottom = `${50 + Math.min(a, 0) / 3.2 * 50}%`;

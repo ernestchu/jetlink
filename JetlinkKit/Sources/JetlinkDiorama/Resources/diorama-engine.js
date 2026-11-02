@@ -587,10 +587,73 @@
     return { labels, comps };
   }
 
+  // ---------------------------------------------------------------- road view or bird's-eye
+  // Bird's-eye while the scene asks for a look around, the road view while cruising. Cues, each a reason shown on
+  // the page: stopped; a turn coming (the planned path bending within the next 40 m, and slowing for it or sharply:
+  // a sweeping ramp or bend taken at speed is not one); a crosswalk ahead within a few seconds, going slowly or
+  // slowing for it (not one driven straight over); a close lead in slow traffic; or simply slow. A cue must hold a moment before the view pans down, the
+  // road view comes back only after none for a while and at speed, and either view is held a few seconds at least.
+  const VIEW = {
+    stopped: 3, slow: 12, roadAbove: 18,  // mph
+    turnDeg: 20, turnSlow: 22, turnSharp: 45, turnAhead: 40, turnBelow: 45,  // a bend of turnDeg within turnAhead m
+    // that the plan slows below turnSlow mph for, or one of turnSharp degrees; and either only below turnBelow mph
+    crossSeconds: 2.5, crossMin: 10, crossBelow: 20, crossSlow: 15,  // a crosswalk within that many seconds (at least
+    // m) ahead, below crossBelow mph or with the plan slowing below crossSlow mph before it
+    queueLead: 15, queueBelow: 25,  // a lead within that many m in traffic below that many mph
+    enter: 0.4, leave: 3.0, hold: 3.0,  // seconds
+  };
+
+  class ViewChooser {
+    constructor(opts) { this.o = Object.assign({}, VIEW, opts); this.target = null; this.since = 0; this.cueFor = 0; this.calmFor = 0; this.why = ''; }
+
+    // the cue in this frame, or '': v in m/s; px, py the plan, pv its speeds; stripes in the world, pose the ego's;
+    // lead or null
+    cue(v, px, py, pv, stripes, pose, lead) {
+      const o = this.o, mph = v * MPH;
+      if (mph < o.stopped) return 'stopped';
+      if (mph < o.turnBelow) {
+        let j = 1; while (j < px.length - 1 && px[j] < o.turnAhead) j++;
+        const h0 = Math.atan2(py[1] - py[0], px[1] - px[0] || 1e-3), h1 = Math.atan2(py[j] - py[j - 1], px[j] - px[j - 1] || 1e-3);
+        const bend = Math.abs(Math.atan2(Math.sin(h1 - h0), Math.cos(h1 - h0))) * 180 / Math.PI;
+        const slowest = Math.min(...pv.slice(0, j + 1)) * MPH;
+        if (px[j] - px[0] > 5 && (bend > o.turnSharp || (bend > o.turnDeg && slowest < o.turnSlow))) return 'turn';
+      }
+      const reach = Math.max(o.crossMin, v * o.crossSeconds);
+      let r = 0; while (r < px.length - 1 && px[r] < reach) r++;
+      const slowing = Math.min(...pv.slice(0, r + 1)) * MPH < o.crossSlow;
+      if ((mph < o.crossBelow || slowing) && stripes.length && pose) {
+        const c = Math.cos(pose[2]), s = Math.sin(pose[2]);
+        for (const quad of stripes) {
+          for (const [wx, wy] of quad) {
+            const x = c * (wx - pose[0]) + s * (wy - pose[1]), y = -s * (wx - pose[0]) + c * (wy - pose[1]);
+            if (x > 0 && x < reach && Math.abs(y) < 12) return 'crossing';
+          }
+        }
+      }
+      if (lead && lead.x < o.queueLead && mph < o.queueBelow) return 'traffic';
+      if (mph < o.slow) return 'slow';
+      return '';
+    }
+
+    // 1 for bird's-eye, 0 for the road view, after this frame's cue
+    step(cue, v) {
+      const o = this.o, mph = v * MPH;
+      this.since += DT;
+      this.cueFor = cue ? this.cueFor + DT : 0;
+      this.calmFor = cue ? 0 : this.calmFor + DT;
+      if (cue) this.why = cue;
+      if (this.target === null) { this.target = cue ? 1 : 0; this.since = 0; return this.target; }
+      if (this.since < o.hold) return this.target;
+      if (this.target === 0 && this.cueFor >= o.enter) { this.target = 1; this.since = 0; }
+      else if (this.target === 1 && this.calmFor >= o.leave && mph > o.roadAbove) { this.target = 0; this.since = 0; this.why = ''; }
+      return this.target;
+    }
+  }
+
   // ---------------------------------------------------------------- the scene, frame by frame
   class Engine {
     constructor(opts = {}) {
-      this.opts = Object.assign({ bevBelow: 20, roadAbove: 21, panSeconds: 3 }, opts);
+      this.opts = Object.assign({ panSeconds: 3, view: {} }, opts);
       this.meta = null;
       this.reset();
     }
@@ -601,7 +664,7 @@
       this.roadmap = this.cam ? new RoadMap(this.cam) : null;
       this.pendingSeg = []; this.lastSeg = null;
       this.stripes = []; this.stripesFrame = -1;
-      this.speed = null; this.view = null; this.target = null;
+      this.speed = null; this.view = null; this.chooser = new ViewChooser(this.opts.view);
       this.frame = -1; this.state = null;
       this.timing = { model: [], seg: [], segFrames: [], lag: [] };
     }
@@ -625,8 +688,10 @@
       this.trail.add(k, raw.pose);
       this.frame = k;
 
-      const px = [], pz = [], py = [];
-      for (let i = 0; i < IDX_N; i++) { px.push(plan(out.plan, i, 0)); py.push(plan(out.plan, i, 1)); pz.push(plan(out.plan, i, 2)); }
+      const px = [], pz = [], py = [], pv = [];
+      for (let i = 0; i < IDX_N; i++) {
+        px.push(plan(out.plan, i, 0)); py.push(plan(out.plan, i, 1)); pz.push(plan(out.plan, i, 2)); pv.push(plan(out.plan, i, 3));
+      }
       const moving = px[IDX_N - 1] > px[0] + 1;
       const zpath = moving ? (x) => interp(x, px, pz) : () => 0;
       const laneY = X_IDXS.map((_, i) => (lane(out.lane_lines, 1, i, 0) + lane(out.lane_lines, 2, i, 0)) / 2);
@@ -664,19 +729,16 @@
         }
       }
 
-      // road view at speed, bird's-eye below it, panning between the two
+      // road view or bird's-eye (ViewChooser), panning between the two
       const v = plan(out.plan, 0, 3);
       this.speed = this.speed === null ? v : 0.9 * this.speed + 0.1 * v;
-      const mph = this.speed * MPH, o = this.opts;
-      if (this.target === null) this.target = mph < o.bevBelow ? 1 : 0;
-      else if (this.target === 0 && mph < o.bevBelow) this.target = 1;
-      else if (this.target === 1 && mph > o.roadAbove) this.target = 0;
-      const stepS = DT / o.panSeconds;
-      this.view = this.view === null ? this.target : clamp(this.view + Math.sign(this.target - this.view) * stepS, Math.min(this.view, this.target), Math.max(this.view, this.target));
+      const target = this.chooser.step(this.chooser.cue(this.speed, px, py, pv, this.stripes, pNow, lead), this.speed);
+      const stepS = DT / this.opts.panSeconds;
+      this.view = this.view === null ? target : clamp(this.view + Math.sign(target - this.view) * stepS, Math.min(this.view, target), Math.max(this.view, target));
 
       this.state = {
-        frame: k, seconds: msg.seconds, out, px, py, pz, zpath, lead,
-        pose: pNow, stripes: this.stripes, view: smoothstep(0, 1, this.view),
+        frame: k, seconds: msg.seconds, out, px, py, pz, pv, zpath, lead,
+        pose: pNow, stripes: this.stripes, view: smoothstep(0, 1, this.view), viewWhy: target ? this.chooser.why : '',
         hud: { v: this.speed, a: plan(out.plan, 0, 6), lead: lead ? lead.x : null },
       };
       return this.state;
@@ -688,7 +750,7 @@
   const api = {
     FPS, DT, MPH, IDX_N, X_IDXS, EGO_FRONT, EGO_REAR,
     clamp, smoothstep, interp, percentile, m3mul, m3inv, m3vec, VIEW_FROM_DEVICE,
-    decode, readFile, parseDrive, plan, lane, leadAt, FrameCamera, RoadMap, Engine,
+    decode, readFile, parseDrive, plan, lane, leadAt, FrameCamera, RoadMap, Engine, ViewChooser, VIEW,
     readSeg, segSeesVehicle, morph, runs, components,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

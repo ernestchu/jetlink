@@ -4,8 +4,8 @@
 // See the LICENSE file in the root directory for more details.
 //
 // Diorama's renderer: the engine's scene in WebGL2. Pure CGI, nothing from a
-// camera is drawn. A virtual camera follows the ego car from behind at speed
-// and pans up to a bird's-eye view below it.
+// camera is drawn. A virtual camera follows the ego car from behind while it
+// cruises and pans up to a bird's-eye view when the engine's ViewChooser asks.
 (function (root) {
   'use strict';
   const E = root.DioramaEngine;

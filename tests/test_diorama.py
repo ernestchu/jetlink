@@ -187,3 +187,56 @@ def test_export_unpack_matches_opencv():
   ref = cv2.cvtColor(np.concatenate([Y.ravel(), w6[4].ravel(), w6[5].ravel()]).reshape(384, 512), cv2.COLOR_YUV2RGB_I420)
   got = unpack_rgb(torch.from_numpy(w6[None].astype(np.float32)))[0].permute(1, 2, 0).numpy()
   assert np.abs(got - ref).max() <= 1.0
+
+
+def chooser(script: str) -> dict:
+  """The page engine's ViewChooser, run by `script` under node, which prints JSON."""
+  head = f"const E = require({json.dumps(str(ENGINE))});\n"
+  return json.loads(subprocess.run(['node', '-e', head + script], capture_output=True, text=True, check=True).stdout)
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page engine')
+def test_view_pans_down_for_a_cue_held_a_moment_and_back_only_after_calm_at_speed():
+  out = chooser("""
+    const c = new E.ViewChooser({}), mps = 30 / E.MPH, seen = [];
+    const run = (cue, seconds, v = mps) => { for (let i = 0; i < seconds * 20; i++) seen.push(c.step(cue, v)); return seen[seen.length - 1]; };
+    console.log(JSON.stringify({
+      cruising: run('', 4),
+      glimpse: run('turn', 0.3),  // shorter than `enter`: no pan
+      turn: run('turn', 0.2),
+      after: run('', 2.0),  // within `leave` (and `hold`)
+      calm: run('', 1.2),
+      slowCalm: (run('turn', 4), run('', 5, 10 / E.MPH)),  // calm, but below roadAbove: stays
+      why: c.why,
+    }));
+  """)
+  assert out == {'cruising': 0, 'glimpse': 0, 'turn': 1, 'after': 1, 'calm': 0, 'slowCalm': 1, 'why': 'turn'}
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page engine')
+def test_view_cues():
+  out = chooser("""
+    const c = new E.ViewChooser({}), mph = (m) => m / E.MPH;
+    const xs = Array.from({length: 33}, (_, i) => i * 3), straight = xs.map(() => 0);
+    const bend = xs.map((x) => (x > 15 ? (x - 15) ** 2 / 60 : 0));  // curving off to one side past 15 m
+    const ramp = xs.map((x) => (x > 15 ? -((x - 15) ** 2) / 80 : 0));  // a sweeping bend, about 30 degrees by 40 m
+    const pose = [100, 50, 0], ahead = (x) => [[[100 + x, 48], [100 + x, 52], [101 + x, 52], [101 + x, 48]]];
+    const at = (m) => xs.map(() => mph(m)), slowing = (from, to) => xs.map((_, i) => mph(from + (to - from) * i / 32));
+    console.log(JSON.stringify({
+      stopped: c.cue(mph(1), xs, straight, at(1), [], pose, null),
+      cruise: c.cue(mph(30), xs, straight, at(30), [], pose, null),
+      turn: c.cue(mph(30), xs, bend, slowing(30, 10), [], pose, null),  // sharp, and slowing for it
+      ramp: c.cue(mph(30), xs, ramp, at(30), [], pose, null),  // taken at speed: not a turn
+      rampSlowing: c.cue(mph(30), xs, ramp, slowing(30, 5), [], pose, null),  // 19 mph by 40 m
+      turnFast: c.cue(mph(60), xs, bend, at(60), [], pose, null),
+      crossing: c.cue(mph(15), xs, straight, at(15), ahead(15), pose, null),
+      crossingStopping: c.cue(mph(28), xs, straight, xs.map((_, i) => mph(Math.max(0, 28 - 3 * i))), ahead(20), pose, null),
+      crossingOver: c.cue(mph(28), xs, straight, at(28), ahead(20), pose, null),  // driven straight over: not one
+      crossingFar: c.cue(mph(15), xs, straight, at(15), ahead(60), pose, null),
+      traffic: c.cue(mph(20), xs, straight, at(20), [], pose, {x: 9}),
+      slow: c.cue(mph(8), xs, straight, at(8), [], pose, null),
+    }));
+  """)
+  assert out == {'stopped': 'stopped', 'cruise': '', 'turn': 'turn', 'ramp': '', 'rampSlowing': 'turn', 'turnFast': '',
+                 'crossing': 'crossing', 'crossingStopping': 'crossing', 'crossingOver': '', 'crossingFar': '',
+                 'traffic': 'traffic', 'slow': 'slow'}
