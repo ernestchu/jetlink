@@ -8,7 +8,7 @@ See the LICENSE file in the root directory for more details.
     python -m diorama run /data/media/0/realdata/<route>--* --model big.onnx --models ~/diorama-models --out drive/
     python -m diorama view drive/
     python -m diorama replay /data/media/0/realdata/<route>--* --model big.onnx --host 127.0.0.1   # into a live server
-    python -m diorama assets   # rebuild the page's car (diorama/assets.py)
+    python -m diorama assets model.obj   # rebuild the page's car from its model (diorama/assets.py)
 """
 from __future__ import annotations
 
@@ -55,7 +55,8 @@ def main(argv: list[str] | None = None) -> int:
   v.add_argument('--port', type=int, default=8642)
   v.add_argument('--no-browser', action='store_true')
 
-  a = sub.add_parser('assets', help="rebuild the page's car, diorama-assets.bin, after changing diorama/assets.py")
+  a = sub.add_parser('assets', help="rebuild the page's car, diorama-assets.bin, from its model's OBJ (needs scipy)")
+  a.add_argument('obj', type=Path, help='the OBJ of the model diorama/assets.py names')
   a.add_argument('--out', type=Path, help='default: the page resources in JetlinkKit')
 
   args = ap.parse_args(argv)
@@ -73,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
   elif args.cmd == 'assets':
     from diorama.assets import RESOURCES, write_library
     out = args.out or RESOURCES / 'diorama-assets.bin'
-    print(f'wrote {out}, {write_library(out)} bytes')
+    print(f'wrote {out}, {write_library(args.obj, out)} bytes')
   else:
     from diorama.viewer import serve
     serve(args.drive, args.port, open_browser=not args.no_browser)

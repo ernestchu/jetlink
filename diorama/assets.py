@@ -4,19 +4,21 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-Diorama's car: a procedural electric crossover (an original design, no external
-models), the one vehicle the page draws, as the lead and as the ego car, and
-the binary file the page loads it from (`write_library`). After changing it:
+Diorama's car: the one vehicle the page draws, as the lead and as the ego car,
+and the binary file the page loads it from (`write_library`).
 
-    python -m diorama assets
+It is "2021 Tesla Model Y" by tonielpro520
+(https://sketchfab.com/3d-models/2021-tesla-model-y-59e2ead369984b1a85c800ff6cf6789d),
+licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changed
+for Diorama: recoloured in the page's flat colours by part, and its badges,
+interior, brakes and the frames hidden behind its body left out. Its triangles
+are otherwise the model's own, at full resolution.
 
-The body is one smooth surface: every cross-section is a single rounded outline
-from the underside, up the side to the shoulder and on over the glass to the
-roof, lofted from the tail to the nose, with both ends rounded off. The glass,
-lamps and trim are colours on it, so nothing sits proud of it.
+To rebuild diorama-assets.bin, download the model's OBJ from that page, then (with scipy installed):
+
+    python -m diorama assets ~/Downloads/2021-tesla-model-y/source/<model>.obj
 
 Local frame: x forward, y right, z UP, origin on the ground under the car's centre, units in metres.
-Each mesh is a dict of arrays: pos (N,3), nrm (N,3), col (N,3) in 0..1, emis (N,) and idx (M,3).
 """
 from __future__ import annotations
 
@@ -25,6 +27,8 @@ from pathlib import Path
 import numpy as np
 
 RESOURCES = Path(__file__).resolve().parent.parent / 'JetlinkKit' / 'Sources' / 'JetlinkDiorama' / 'Resources'
+DIMS = (4.76, 1.87, 1.66)  # length, width without the mirrors, height
+SPAN = 4.0  # positions are stored as 16-bit fractions of this many metres either way
 
 BODY = np.array([0.62, 0.62, 0.64])  # the paint as stored; the page colours it (emission -1 marks it)
 GLASS = np.array([0.33, 0.33, 0.35])
@@ -32,230 +36,160 @@ TRIM = np.array([0.30, 0.30, 0.32])
 TIRE = np.array([0.22, 0.22, 0.23])
 RIM = np.array([0.40, 0.40, 0.42])
 TAIL = np.array([0.80, 0.10, 0.10])
-HEAD = np.array([0.90, 0.91, 0.93])
+HEAD = np.array([0.88, 0.89, 0.91])
 
-L, W, H = 4.60, 1.88, 1.68  # length, width without the mirrors, height
-FRONT, REAR = L / 2, -L / 2
-AXLES, WHEEL_R, WHEEL_W = (1.38, -1.32), 0.37, 0.25
-ARCH = WHEEL_R + 0.06
-END_R = (0.16, 0.24)  # how far the tail and the nose round off over
+# the model's materials, and what each is in the page's colours
+PARTS = {
+  'Carro_Pintura': 'body', 'Carro_Vidros2': 'glass', 'Carro_Plastico_Brilho_1': 'glass', 'Carro_Espelhos': 'glass',
+  'Carro_Plastico_Brilho': 'trim', 'Carro_Plastico': 'trim', 'Carro_Metal_Preto': 'trim', 'Carro_Pneu': 'tire',
+  'Carro_Metal_Lanterna_Traseira': 'tail', 'Carro_Metal_Vermelho': 'tail', 'Carro_Metal_Vermelho_1': 'tail',
+  'Carro_Metal_Vermelho_3': 'tail', 'Carro_Vidro_Vermelho2': 'tail', 'Carro_Metal_Vermelho_2': 'reflector',
+  'Carro_Metal_Farol': 'head', 'Carro_Metal_Farol_1': 'head',
+}  # left out: Carro_Cromado (the badges), and Carro_Interno, Carro_Freio and Carro_Freio_Disco (unseen behind the glass and wheels)
+AXLES, WHEEL_R, TRACK = (1.47, -1.42), 0.40, 0.773  # where the model's wheels are
 
 
-def smoothstep(e0, e1, x):
-  t = np.clip((np.asarray(x, float) - e0) / (e1 - e0), 0.0, 1.0)
-  return t * t * (3 - 2 * t)
+def read_obj(path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+  """An OBJ's vertices, its triangles (polygons as fans) and each triangle's material."""
+  verts, tris, mats, mat = [], [], [], ''
+  with open(path, errors='replace') as fh:
+    for line in fh:
+      if line.startswith('v '):
+        verts.append([float(t) for t in line.split()[1:4]])
+      elif line.startswith('usemtl'):
+        mat = line.split(None, 1)[1].strip()
+      elif line.startswith('f '):
+        idx = [int(t.split('/')[0]) - 1 for t in line.split()[1:]]
+        for k in range(1, len(idx) - 1):
+          tris.append((idx[0], idx[k], idx[k + 1]))
+          mats.append(mat)
+  return np.array(verts), np.array(tris), np.array(mats)
 
 
-def merge(*meshes):
-  pos, nrm, col, emis, idx, n = [], [], [], [], [], 0
+def kept(P, tris, mat):
+  """The triangles of a material that can be seen."""
+  c = P[tris].mean(axis=1)
+  if mat == 'Carro_Plastico':  # of the matte black, the arch liners and lower trim; above, frames behind the body and glass
+    return tris[P[tris, 2].max(axis=1) < 0.8]
+  if mat == 'Carro_Plastico_Brilho_1':  # the glass roof; a strip of it flush on the tailgate would flicker against the paint
+    return tris[P[tris, 2].min(axis=1) > 1.2]
+  if mat == 'Carro_Metal_Preto':  # the wheels and the wipers, not the radiator behind the bumper
+    wheel = np.zeros(len(tris), bool)
+    for ax in AXLES:
+      wheel |= (np.hypot(c[:, 0] - ax, c[:, 2] - WHEEL_R) < WHEEL_R) & (np.abs(c[:, 1]) > TRACK - 0.20)
+    return tris[wheel | (c[:, 2] > 0.9)]
+  return tris
+
+
+def lenses(P, tris):
+  """The window glass's material also makes the lamps' clear lenses, over the lamps: its pieces' roles by where each
+  sits, the two at the tail's corners the tail lamps' lenses, those at the nose the headlamps'; the rest are windows."""
+  from scipy.sparse import coo_matrix
+  from scipy.sparse.csgraph import connected_components
+  _, at = np.unique(np.round(P[tris.ravel()] / 0.001).astype(np.int64), axis=0, return_inverse=True)  # a piece's panels joined
+  t = at.reshape(-1, 3)
+  n = t.max() + 1
+  edges = np.concatenate([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]])
+  _, piece = connected_components(coo_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(n, n)), directed=False)
+  piece = piece[t[:, 0]]
+  role = np.full(len(tris), 'glass', dtype=object)
+  for i in np.unique(piece):
+    c = P[tris[piece == i]].reshape(-1, 3).mean(axis=0)
+    if c[0] < -1.8 and c[2] < 1.2:
+      role[piece == i] = 'tail'
+    elif c[0] > 1.6 and c[2] < 1.0:
+      role[piece == i] = 'head'
+  return role
+
+
+def normals(p, t):
+  """Angle-weighted vertex normals."""
+  e = [p[t[:, (j + 1) % 3]] - p[t[:, j]] for j in range(3)]
+  fn = np.cross(e[0], -e[2])
+  fn /= np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-12)
+  n = np.zeros_like(p)
+  for j in range(3):
+    a, b = e[j], -e[(j + 2) % 3]
+    cos = np.sum(a * b, axis=1) / np.maximum(np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1), 1e-12)
+    np.add.at(n, t[:, j], fn * np.arccos(np.clip(cos, -1, 1))[:, None])
+  return n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+
+
+def car(obj):
+  """The model in the page's colours, a list of meshes (dicts of pos, nrm, col, emis, idx), one per material. The tail
+  lamps glow (the brake lights the page brightens) and the headlamps too; the paint is marked with emission -1, for
+  the page to colour: grey for the lead, and for the ego car."""
+  V, tris, mats = read_obj(obj)
+  P = np.c_[V[:, 2], -V[:, 0], V[:, 1]]  # the model is y up, its headlamps toward +z
+  meshes = []
+  pieces = []
+  for mat, role in PARTS.items():
+    mine = kept(P, tris[mats == mat], mat)
+    if mat == 'Carro_Vidros2':
+      roles = lenses(P, mine)
+      pieces += [(mine[roles == r], r) for r in ('glass', 'tail', 'head')]
+    else:
+      pieces.append((mine, role))
+  for mine, role in pieces:
+    if not len(mine):
+      continue
+    used, inv = np.unique(mine.ravel(), return_inverse=True)
+    p, t = P[used], inv.reshape(-1, 3)
+    col = np.repeat({'body': BODY, 'glass': GLASS, 'trim': TRIM, 'tire': TIRE, 'tail': TAIL, 'reflector': TAIL * 0.8,
+                     'head': HEAD}[role][None], len(p), 0)
+    if role == 'trim':  # the dark metal inside a wheel is its rim
+      rim = np.zeros(len(p), bool)
+      for ax in AXLES:
+        rim |= (np.hypot(p[:, 0] - ax, p[:, 2] - WHEEL_R) < 0.8 * WHEEL_R) & (np.abs(p[:, 1]) > TRACK - 0.18)
+      col[rim] = RIM
+    emis = np.full(len(p), {'body': -1.0, 'tail': 0.7, 'head': 0.5}.get(role, 0.0))
+    meshes.append({'pos': p, 'nrm': normals(p, t), 'col': col, 'emis': emis, 'idx': t})
+  return meshes
+
+
+def parts(meshes, limit=65535):
+  """The meshes packed into as few parts as fit 16-bit indices (each under `limit` vertices)."""
+  out, cur = [], []
   for m in meshes:
-    pos.append(m['pos'])
-    nrm.append(m['nrm'])
-    col.append(m['col'])
-    emis.append(m['emis'])
-    idx.append(m['idx'] + n)
-    n += len(m['pos'])
-  return {'pos': np.concatenate(pos).astype(np.float32), 'nrm': np.concatenate(nrm).astype(np.float32),
-          'col': np.concatenate(col).astype(np.float32), 'emis': np.concatenate(emis).astype(np.float32),
-          'idx': np.concatenate(idx).astype(np.uint32)}
+    if cur and sum(len(c['pos']) for c in cur) + len(m['pos']) > limit:
+      out.append(cur)
+      cur = []
+    cur.append(m)
+  out.append(cur)
+  packed = []
+  for group in out:
+    n, idx = 0, []
+    for m in group:
+      idx.append(m['idx'] + n)
+      n += len(m['pos'])
+    packed.append({k: np.concatenate([m[k] for m in group]) for k in ('pos', 'nrm', 'col', 'emis')} | {'idx': np.concatenate(idx)})
+  return packed
 
 
-def grid_mesh(P, color_fn, caps=True):
-  """P: (N stations, K ring points, 3) closed rings -> a smooth mesh, with flat caps closing the ends."""
-  N, K, _ = P.shape
-  n = np.cross(np.gradient(P, axis=0), np.roll(P, -1, axis=1) - np.roll(P, 1, axis=1))
-  flip = np.sum(n * (P - P.mean(axis=1, keepdims=True)), axis=-1) < 0
-  n[flip] *= -1
-  n /= np.maximum(np.linalg.norm(n, axis=-1, keepdims=True), 1e-9)
-  pos, nrm = P.reshape(-1, 3), n.reshape(-1, 3)
-  col, emis = color_fn(pos, nrm)
-  i, k = np.meshgrid(np.arange(N - 1), np.arange(K), indexing='ij')
-  a, b = i * K + k, i * K + (k + 1) % K
-  idx = np.concatenate([np.stack([a, b, a + K], -1).reshape(-1, 3), np.stack([b, b + K, a + K], -1).reshape(-1, 3)])
-  meshes = [{'pos': pos, 'nrm': nrm, 'col': col, 'emis': emis, 'idx': idx}]
-  for end in ((0, N - 1) if caps else ()):
-    ring = P[end]
-    ax = (P[min(end + 1, N - 1)] - P[max(end - 1, 0)]).mean(0)
-    ax = ax / max(np.linalg.norm(ax), 1e-9) * (-1 if end == 0 else 1)
-    cp = np.vstack([ring.mean(0, keepdims=True), ring])
-    cn = np.repeat(ax[None], K + 1, 0)
-    cc, ce = color_fn(cp, cn)
-    ring_i = np.arange(1, K + 1)
-    meshes.append({'pos': cp, 'nrm': cn, 'col': cc, 'emis': ce, 'idx': np.stack([np.zeros(K, int), ring_i, np.roll(ring_i, -1)], 1)})
-  return merge(*meshes)
+def write_library(obj, path=RESOURCES / 'diorama-assets.bin') -> int:
+  """diorama-assets.bin: u32 header length, the JSON header, then the vertices and the triangles.
 
-
-def chaikin(pts, rounds=4):
-  """An open polyline's corners cut `rounds` times: a smooth curve through the same ends."""
-  for _ in range(rounds):
-    a, b = pts[:-1], pts[1:]
-    pts = np.vstack([pts[:1], np.stack([0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b], 1).reshape(-1, 2), pts[-1:]])
-  return pts
-
-
-# ---------------- the body's outline along its length ----------------
-def lower_top(x):
-  """The top of the lower body: the tailgate's lower edge, the shoulder along the cabin, a short hood falling to a blunt nose."""
-  return np.interp(x, [REAR, REAR + 0.30, -0.50, 0.70, 1.00, 1.50, 1.95, FRONT], [1.06, 1.10, 1.06, 1.04, 1.12, 1.07, 1.00, 0.90])
-
-
-def roof(x):
-  """The top of the section: a steep tailgate from its lower edge up to a short spoiler, a long roof held almost level,
-  then the windshield down to its base and the hood."""
-  cabin = np.interp(x, [REAR, REAR + 0.06, REAR + 0.20, REAR + 0.34, REAR + 0.42, -1.20, -0.30, 0.15, 0.40, 0.70, 1.00],
-                    [1.06, 1.30, 1.54, 1.64, H - 0.01, H, H - 0.005, 1.63, 1.52, 1.33, 1.12])
-  return np.where(x < 1.00, np.maximum(cabin, lower_top(x)), lower_top(x))
-
-
-def underside(x):
-  zb = np.interp(x, [REAR, REAR + 0.50, FRONT - 0.50, FRONT], [0.34, 0.22, 0.21, 0.30])
-  for ax in AXLES:  # the arches: the underside rises over each wheel
-    zb = np.maximum(zb, WHEEL_R + np.sqrt(np.clip(ARCH ** 2 - (x - ax) ** 2, 0, None)) * (np.abs(x - ax) < ARCH))
-  return zb
-
-
-def half_width(x):
-  return np.interp(x, [REAR, REAR + 0.35, REAR + 0.90, FRONT - 0.90, FRONT - 0.45, FRONT], [0.84, 0.92, 0.95, 0.95, 0.93, 0.80]) * W / 1.9
-
-
-# rows of each half outline, from the middle of the underside to the middle of the roof: underside, side up to the
-# shoulder, the glass up to the roof's edge, the roof. A colour's edge is then always one row, a clean line along the car.
-ROWS = {'under': 8, 'side': 16, 'shoulder': 3, 'glass': 9, 'rim': 2, 'roof': 6}
-
-
-def section(x):
-  """The half outline at x as rows (see ROWS), each tagged with its part: the middle of the underside, up the side,
-  over the shoulder and the glass, to the middle of the roof."""
-  hw, zb, belt, top = half_width(x), underside(x), lower_top(x), roof(x)
-  cabin = smoothstep(0.03, 0.30, top - belt)  # 0 where there is no cabin over the lower body (hood, tail)
-  wtop = (1 - cabin) * hw * 0.86 + cabin * hw * 0.64  # the roof's (or the hood's) half width
-  rise = max(top - belt, 0.0)
-  keys = {  # the outline's control points, and which part each begins
-    'under': [[0.0, zb], [hw * 0.55, zb]],
-    'side': [[hw * 0.90, zb + 0.02], [hw, zb + 0.14], [hw * 1.005, belt - 0.30], [hw * 0.99, belt - 0.08]],
-    'shoulder': [[hw * (0.955 - 0.015 * cabin), belt + 0.01]],
-    'glass': [[hw * (0.94 - 0.01 * cabin), belt + 0.035 * cabin + 0.01], [wtop + (hw * 0.94 - wtop) * 0.35, belt + rise * 0.55]],
-    'rim': [[wtop, top - 0.05 - 0.04 * cabin]],
-    'roof': [[wtop * 0.75, top - 0.02], [wtop * 0.40, top - 0.004], [0.0, top]],
-  }
-  pts = np.array([q for part in ROWS for q in keys[part]])
-  starts = np.cumsum([0] + [len(keys[part]) for part in ROWS])[:-1]
-  curve = chaikin(pts, 4)
-  s = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(curve, axis=0), axis=1))])
-  # where each part begins on the smooth curve: the curve's nearest point to its first control point
-  at = [s[np.argmin(np.linalg.norm(curve - pts[i], axis=1))] for i in starts] + [s[-1]]
-  u = np.concatenate([np.linspace(at[j], at[j + 1], n, endpoint=False) for j, n in enumerate(ROWS.values())] + [[s[-1]]])
-  part = np.concatenate([[j] * n for j, n in enumerate(ROWS.values())] + [[len(ROWS) - 1]])
-  return np.interp(u, s, curve[:, 0]), np.interp(u, s, curve[:, 1]), part
-
-
-def body_mesh(N=160):
-  # stations closer together toward both ends, where the shape turns
-  t = np.linspace(0, 1, N)
-  xs = REAR + L * (0.5 * t + 0.5 * (0.5 - 0.5 * np.cos(np.pi * t)))
-  half = sum(ROWS.values()) + 1
-  K = 2 * half - 2
-  P, part = np.zeros((N, K, 3)), np.zeros((N, K), int)
-  for i, x in enumerate(xs):
-    y, z, pr = section(x)
-    y, z, pr = np.concatenate([y, -y[-2:0:-1]]), np.concatenate([z, z[-2:0:-1]]), np.concatenate([pr, pr[-2:0:-1]])
-    # the ends round off like a rounded box: full almost to the end, then the section closes in on the lamps' height,
-    # so the lamps run straight across
-    r = END_R[0] if x < 0 else END_R[1]
-    d = np.clip(max((REAR + r) - x, x - (FRONT - r)), 0, None)
-    s = np.clip(1 - (d / r) ** 4, 0.0, 1) ** 0.25
-    zc = float(lower_top(x)) - 0.04
-    P[i, :, 0] = x
-    P[i, :, 1] = y * (0.004 + 0.996 * s)
-    P[i, :, 2] = zc + (z - zc) * (0.006 + 0.994 * s)
-    part[i] = pr
-  names = list(ROWS)
-  m = grid_mesh(P, lambda p, n: (np.zeros((len(p), 3)), np.zeros(len(p))))
-  n_grid = N * K
-  pos, nrm = m['pos'], m['nrm']
-  x, z = pos[:, 0], pos[:, 2]
-  row = np.concatenate([part.reshape(-1), np.full(len(pos) - n_grid, names.index('side'))])  # the caps: paint
-  k = np.arange(K)
-  ring = np.concatenate([np.tile(np.minimum(k, K - k), N), np.zeros(len(pos) - n_grid, int)])  # the row, counted from the underside
-  station = np.concatenate([np.repeat(xs, K), np.full(len(pos) - n_grid, xs[0])])
-  cabin = (roof(station) - lower_top(station)) > 0.15
-  col = np.repeat(BODY[None], len(pos), 0)
-  emis = np.full(len(pos), -1.0)  # the paint, for the page to colour
-  glass = cabin & ((row == names.index('glass')) | (row == names.index('roof')))
-  glass &= (station > REAR + 0.12) & (station < 0.98)
-  col[glass], emis[glass] = GLASS, 0.0
-  # the lamps: the shoulder's rows and the side's top two, where they face back (a band across the tail) or forward
-  # (the headlamps, at the nose's corners)
-  lamp = (row == names.index('shoulder')) | ((row == names.index('side')) & (ring >= ROWS['under'] + ROWS['side'] - 1))
-  tail = lamp & (station < REAR + END_R[0] + 0.25) & (nrm[:, 0] < -0.2) & (np.abs(pos[:, 1]) > 0.30)  # at the corners
-  # and the high stop lamp, in the middle of the spoiler's edge
-  tail |= (station < REAR + 0.40) & (nrm[:, 0] < -0.3) & (np.abs(pos[:, 1]) < 0.20) & (np.abs(z - (H - 0.12)) < 0.014)
-  head = lamp & (station > FRONT - END_R[1] - 0.15) & (nrm[:, 0] > 0.2) & (np.abs(pos[:, 1]) > 0.30)
-  col[tail], emis[tail] = TAIL, 0.7
-  col[head], emis[head] = HEAD, 0.5
-  # the black underside, the arch liners and a slim rocker
-  dark = nrm[:, 2] < -0.40
-  for ax in AXLES:
-    dark |= (np.abs(np.hypot(x - ax, z - WHEEL_R) - ARCH) < 0.035) & (np.abs(nrm[:, 1]) > 0.3)
-  col[dark], emis[dark] = TRIM, 0.0
-  m['col'] = col * (0.82 + 0.18 * smoothstep(0.2, 0.9, z))[:, None]
-  m['emis'] = emis
-  return m
-
-
-def wheel(K=36):
-  """A tyre with rounded shoulders and a dark rim face on both sides, its axis along y."""
-  th = np.linspace(0, 2 * np.pi, K, endpoint=False)
-  r, w = WHEEL_R, WHEEL_W
-  prof = [(-w / 2, 0.0), (-w / 2, 0.66), (-w / 2 + 0.012, 0.72), (-w / 2 + 0.004, 0.80), (-w / 2 + 0.02, 0.95), (-w / 2 + 0.06, 1.0),
-          (w / 2 - 0.06, 1.0), (w / 2 - 0.02, 0.95), (w / 2 - 0.004, 0.80), (w / 2 - 0.012, 0.72), (w / 2, 0.66), (w / 2, 0.0)]
-  P = np.array([np.stack([k * r * np.cos(th), np.full(K, y), k * r * np.sin(th)], 1) for y, k in prof])
-
-  def color_fn(pos, nrm):
-    rim = (np.abs(nrm[:, 1]) > 0.6) & (np.hypot(pos[:, 0], pos[:, 2]) < 0.75 * r)
-    return np.where(rim[:, None], RIM, TIRE), np.zeros(len(pos))
-
-  return grid_mesh(P, color_fn, caps=False)
-
-
-def mirror(side):
-  """A small smooth mirror at the base of the windshield, its housing in the paint."""
-  u, v = np.meshgrid(np.linspace(0, np.pi, 10), np.linspace(0, 2 * np.pi, 16, endpoint=False), indexing='ij')
-  P = np.stack([0.09 * np.sin(u) * np.cos(v), 0.08 * np.cos(u), 0.055 * np.sin(u) * np.sin(v)], -1)
-  m = grid_mesh(P, lambda p, n: (np.repeat(BODY[None], len(p), 0), np.full(len(p), -1.0)), caps=False)
-  m['pos'] = m['pos'] + np.array([0.86, side * (W / 2 + 0.07), 1.10])
-  return m
-
-
-def car():
-  parts = [body_mesh(), mirror(-1), mirror(1)]
-  for ax in AXLES:
-    for side in (-1, 1):
-      w = wheel()
-      w['pos'] = w['pos'] + np.array([ax, side * (W / 2 - WHEEL_W / 2 - 0.03), WHEEL_R])
-      parts.append(w)
-  return merge(*parts)
-
-
-def library():
-  """The one car, the lead and the ego car alike, with its nominal (L, W, H)."""
-  return {'car': (car(), (L, W, H))}
-
-
-def write_library(path=RESOURCES / 'diorama-assets.bin') -> int:
-  """diorama-assets.bin: u32 header length, the JSON header (per mesh: dims, vertex and index counts and offsets),
-  then every mesh's vertices as float32 (x, y, z, nx, ny, nz, r, g, b, emission) and its triangles as uint16."""
+  The header names each asset with its dims (L, W, H), `span` and its parts, each part's vertex and index counts and
+  offsets. A vertex is 16 bytes: x, y, z as int16 fractions of `span` metres, the normal as three int8 (/127), the
+  emission as int8 (/127: -1 marks the paint), r, g, b as uint8 (/255) and a byte of padding. Triangles are uint16,
+  indices into their part's vertices."""
   import json
   import struct
-  header, verts, idx, v_at, i_at = {}, [], [], 0, 0
-  for name, (m, dims) in library().items():
-    n, k = len(m['pos']), m['idx'].size
-    assert n < 65536, name
-    header[name] = {'dims': [float(d) for d in dims], 'vertices': n, 'indices': k, 'vertexOffset': v_at, 'indexOffset': i_at}
-    verts.append(np.hstack([m['pos'], m['nrm'], m['col'], m['emis'][:, None]]).astype('<f4'))
-    idx.append(m['idx'].reshape(-1).astype('<u2'))
+  verts, idx, header, v_at, i_at = [], [], {}, 0, 0
+  entry = {'dims': [float(d) for d in DIMS], 'span': SPAN, 'parts': []}
+  for part in parts(car(obj)):
+    n, k = len(part['pos']), part['idx'].size
+    v = np.zeros((n, 16), np.uint8)
+    v[:, 0:6] = np.round(np.clip(part['pos'] / SPAN, -1, 1) * 32767).astype('<i2').view(np.uint8).reshape(n, 6)
+    v[:, 6:9] = np.round(np.clip(part['nrm'], -1, 1) * 127).astype(np.int8).view(np.uint8)
+    v[:, 9] = np.round(np.clip(part['emis'], -1, 1) * 127).astype(np.int8).view(np.uint8)
+    v[:, 10:13] = np.round(np.clip(part['col'], 0, 1) * 255).astype(np.uint8)
+    entry['parts'].append({'vertices': n, 'indices': k, 'vertexOffset': v_at, 'indexOffset': i_at})
+    verts.append(v.reshape(-1))
+    idx.append(part['idx'].reshape(-1).astype('<u2'))
     v_at += n
     i_at += k
+  header['car'] = entry
   head = json.dumps(header, separators=(',', ':')).encode()
   head += b' ' * (-len(head) % 4)
   body = np.concatenate(verts).tobytes() + np.concatenate(idx).tobytes()

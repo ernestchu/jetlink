@@ -83,10 +83,13 @@ ${COMMON}
 in vec3 vw; in vec4 vc; out vec4 frag;
 void main() { frag = vec4(apply_fog(vc.rgb, vw), vc.a); }`],
     mesh: [`#version 300 es
-uniform mat4 mvp; uniform mat4 model; uniform mat3 nmat;
+uniform mat4 mvp; uniform mat4 model; uniform mat3 nmat; uniform float span;
 in vec3 pos; in vec3 nrm; in vec3 col; in float emis;
 out vec3 vw; out vec3 vn; out vec3 vc; out float ve;
-void main() { vw = (model * vec4(pos, 1.0)).xyz; vn = nmat * nrm; vc = col; ve = emis; gl_Position = mvp * vec4(pos, 1.0); }`, `#version 300 es
+void main() {
+  vec4 p = vec4(pos * span, 1.0);  // stored as fractions of span metres
+  vw = (model * p).xyz; vn = nmat * nrm; vc = col; ve = emis; gl_Position = mvp * p;
+}`, `#version 300 es
 precision highp float;
 ${COMMON}
 uniform vec3 light_dir; uniform vec3 amb_sky; uniform vec3 amb_ground; uniform vec3 key; uniform vec3 rim_col;
@@ -230,27 +233,31 @@ void main() {
       return t;
     }
 
-    // diorama-assets.bin (diorama/assets.py): u32 header length, JSON header, float32 vertices, uint16 indices
+    // diorama-assets.bin (diorama/assets.py): u32 header length, JSON header, then 16-byte vertices (int16 position
+    // as a fraction of the asset's span, int8 normal and emission, uint8 colour) and uint16 indices, in parts
     loadAssets(buf) {
       const gl = this.gl, dv = new DataView(buf), hl = dv.getUint32(0, true);
       const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
-      const nv = Object.values(head).reduce((s, m) => s + m.vertices, 0);
-      const verts = new Float32Array(buf.slice(4 + hl, 4 + hl + nv * 40));
-      const idx = new Uint16Array(buf.slice(4 + hl + nv * 40));
+      const nv = Object.values(head).reduce((s, a) => s + a.parts.reduce((t, p) => t + p.vertices, 0), 0);
+      const verts = new Uint8Array(buf, 4 + hl, nv * 16);
+      const idx = new Uint16Array(buf.slice(4 + hl + nv * 16));
       const mp = this.prog.mesh;
       this.assets = {};
-      for (const [name, m] of Object.entries(head)) {
-        const vao = gl.createVertexArray();
-        gl.bindVertexArray(vao);
-        this.buffer(verts.subarray(m.vertexOffset * 10, (m.vertexOffset + m.vertices) * 10));
-        for (const [attr, size, off] of [['pos', 3, 0], ['nrm', 3, 12], ['col', 3, 24], ['emis', 1, 36]]) {
-          const loc = mp.a(attr);
-          gl.enableVertexAttribArray(loc);
-          gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 40, off);
-        }
-        this.buffer(idx.subarray(m.indexOffset, m.indexOffset + m.indices), gl.ELEMENT_ARRAY_BUFFER);
-        gl.bindVertexArray(null);
-        this.assets[name] = { vao, count: m.indices, dims: m.dims };
+      for (const [name, a] of Object.entries(head)) {
+        const parts = a.parts.map((m) => {
+          const vao = gl.createVertexArray();
+          gl.bindVertexArray(vao);
+          this.buffer(verts.subarray(m.vertexOffset * 16, (m.vertexOffset + m.vertices) * 16));
+          for (const [attr, size, type, off] of [['pos', 3, gl.SHORT, 0], ['nrm', 3, gl.BYTE, 6], ['emis', 1, gl.BYTE, 9], ['col', 3, gl.UNSIGNED_BYTE, 10]]) {
+            const loc = mp.a(attr);
+            gl.enableVertexAttribArray(loc);
+            gl.vertexAttribPointer(loc, size, type, true, 16, off);
+          }
+          this.buffer(idx.subarray(m.indexOffset, m.indexOffset + m.indices), gl.ELEMENT_ARRAY_BUFFER);
+          gl.bindVertexArray(null);
+          return { vao, count: m.indices };
+        });
+        this.assets[name] = { parts, dims: a.dims, span: a.span };
       }
     }
 
@@ -491,8 +498,11 @@ void main() {
         gl.uniform3fv(mp.u.paint, paint);
         gl.uniform3fv(mp.u.tint, tint || [0, 0, 0]);
         gl.uniform1f(mp.u.tint_amt, tintAmt); gl.uniform1f(mp.u.spec_amt, spec); gl.uniform1f(mp.u.brake, brake);
-        gl.bindVertexArray(a.vao);
-        gl.drawElements(gl.TRIANGLES, a.count, gl.UNSIGNED_SHORT, 0);
+        gl.uniform1f(mp.u.span, a.span);
+        for (const part of a.parts) {
+          gl.bindVertexArray(part.vao);
+          gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
+        }
       };
       for (const o of objs) draw(o.type, o.x, o.y, o.heading, LEAD_PAINT, th.path, 0.55, 0.06, o.braking ? 1 : 0);
       draw('car', (EGO_FRONT + EGO_REAR) / 2, 0, 0, EGO_PAINT, null, 0, 0.35, 0);

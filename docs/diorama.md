@@ -91,6 +91,14 @@ Mask2Former's code is MIT. The Mapillary Vistas weights come from Meta through
 Hugging Face, and the dataset they were trained on has its own terms. Check
 them before you share the exported files.
 
+**The car:** the page draws every car as
+["2021 Tesla Model Y"](https://sketchfab.com/3d-models/2021-tesla-model-y-59e2ead369984b1a85c800ff6cf6789d)
+by tonielpro520, licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Diorama recolours
+it in the page's flat colours and leaves out its badges, interior, brakes and
+the frames hidden behind its body (`diorama/assets.py`, rebuilt with
+`python -m diorama assets <model.obj>`).
+
 ## Try it on your own footage
 
 `python -m diorama run` takes a drive's segment folders from the comma's
