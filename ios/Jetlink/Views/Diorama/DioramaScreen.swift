@@ -2,8 +2,8 @@ import JetlinkDiorama
 import JetlinkDioramaUI
 import SwiftUI
 
-/// Diorama: the drive as a live 3-D miniature, drawn by the page the Mac and
-/// the Jetson draw it with. Either a Mac nearby runs the comma and the models
+/// Diorama: the drive as a live 3-D miniature, drawn natively in Metal as the
+/// Mac draws it, and as the Jetson's page does. Either a Mac nearby runs the comma and the models
 /// and this only watches, peer to peer, or this iPhone's own server runs the
 /// models, which Settings has to turn on first.
 struct DioramaScreen: View {
@@ -61,14 +61,14 @@ struct DioramaScreen: View {
   }
 }
 
-/// A Mac's drive: the page always, which says it waits for the comma until
+/// A Mac's drive: the scene always, which says it waits for the comma until
 /// messages come, and above it which Mac this is, or that none is found.
 private struct DioramaFromMac: View {
   @Environment(AppModel.self) private var app
 
   var body: some View {
-    // a Mac never sends the frames the models see, so the page offers no Model input
-    DioramaWebView(feed: app.dioramaRemote, modelInput: false)
+    // a Mac never sends the frames the models see, so there is no Model input
+    DioramaSceneView(feed: app.dioramaRemote, modelInput: false)
       .ignoresSafeArea(edges: .horizontal)
       .overlay(alignment: .top) {
         if let note {
@@ -120,7 +120,7 @@ private struct MacMenu: View {
 }
 
 /// The models on this phone's own server: off until turned on, then
-/// downloaded once, then the page while the comma is on the cable.
+/// downloaded once, then the scene while the comma is on the cable.
 struct DioramaOnPhone: View {
   @Environment(AppModel.self) private var app
 
@@ -135,7 +135,7 @@ struct DioramaOnPhone: View {
           .buttonStyle(.borderedProminent)
       }
     } else if let feed = app.server.dioramaFeed {
-      DioramaWebView(feed: feed)
+      DioramaSceneView(feed: feed)
         .ignoresSafeArea(edges: .horizontal)
     } else {
       setup

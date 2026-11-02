@@ -4,8 +4,8 @@ import JetlinkRegistry
 import JetlinkServer
 import SwiftUI
 
-/// Diorama: the drive as a live 3-D miniature, drawn by the same page the
-/// Jetson serves, in a web view fed straight from the server's stage. The
+/// Diorama: the drive as a live 3-D miniature, drawn natively in Metal as the
+/// Jetson's page draws it, fed straight from the server's stage. The
 /// stage's models run only while this view is open, or an iPhone watches.
 struct DioramaView: View {
   @Environment(ServerStore.self) private var server
@@ -23,7 +23,7 @@ struct DioramaView: View {
   @ViewBuilder
   private var content: some View {
     if let feed = server.dioramaFeed {
-      DioramaWebView(feed: feed)
+      DioramaSceneView(feed: feed)
     } else {
       ContentUnavailableView {
         Label("Diorama is off", systemImage: "cube.transparent")

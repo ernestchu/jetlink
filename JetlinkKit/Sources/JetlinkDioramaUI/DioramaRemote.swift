@@ -5,7 +5,7 @@
   import Observation
 
   /// The drive from a Mac nearby, for a view: which Macs there are, which one
-  /// is watched, and its messages for the page. It looks for Macs only
+  /// is watched, and its messages for the scene. It looks for Macs only
   /// between `activate()` and `deactivate()`, the time the view is on screen.
   @MainActor
   @Observable
@@ -54,7 +54,7 @@
 
     // MARK: DioramaFeed
 
-    /// `input` is ignored: a Mac sends only what the page draws with, never the frames the models see.
+    /// `input` is ignored: a Mac sends only what the scene is drawn from, never the frames the models see.
     public func start(input: Bool, deliver: @escaping @MainActor @Sendable ([Data]) async -> Void) {
       self.deliver = deliver
       watch.send("ready")

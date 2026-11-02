@@ -6,11 +6,9 @@
   See the LICENSE file in the root directory for more details.
 
   Diorama: a live 3-D miniature of the drive, from what the driving model sees.
-  One page, three sources:
+  One page, two sources (the Mac and iPhone apps draw the same scene natively, DioramaScene.swift):
     live    served by jetlink-server at /diorama/, fed by /diorama/events
     drive   ?drive=drive.diorama&footage=footage.mp4: a recorded drive (python -m diorama view) beside its footage
-    bridge  ?bridge=1: the Mac app pushes the messages itself (Diorama.push)
-    noinput ?noinput=1: no Model input toggle, as on an iPhone watching a Mac, which is never sent the frames
 -->
 <html lang="en">
 <head>
@@ -359,17 +357,7 @@
     };
   }
 
-  // ---- the Mac app, which pushes the server's messages itself
-  function bridgeSource() {
-    window.Diorama = { push: (s) => take(b64(s)), pushAll: (list) => list.forEach((s) => take(b64(s))), reset: () => engine.reset() };
-    wait('Waiting for the comma…');
-    const post = (m) => { try { window.webkit.messageHandlers.diorama.postMessage(m); } catch (e) { /* not in the app */ } };
-    if (params.get('noinput')) post('ready');
-    else post(inputToggle((on) => post(on ? 'input:on' : 'input:off')) ? 'input:on' : 'ready');
-    return { tick() { wait(performance.now() - lastData < 2000 ? '' : 'Waiting for the comma…'); } };
-  }
-
-  const live = !params.get('drive') && !params.get('bridge');
+  const live = !params.get('drive');
   let source = { tick: null };
   (async () => {
     try {
@@ -380,7 +368,6 @@
       return;
     }
     if (params.get('drive')) source = await driveSource(params.get('drive'), params.get('footage'));
-    else if (params.get('bridge')) source = bridgeSource();
     else source = liveSource();
     setInterval(stats, 500);
     requestAnimationFrame(frame);

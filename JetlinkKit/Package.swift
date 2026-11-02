@@ -108,11 +108,18 @@ let package = Package(
       dependencies: [
         "JetlinkKit", "JetlinkLog", "JetlinkServer", "JetlinkStatusPage", .target(name: "CUsbfs", condition: .when(platforms: linux)),
       ]),
-    // Diorama: the models on the frames a server answers, and the page that draws the drive.
-    .target(name: "JetlinkDiorama", dependencies: ["JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")]),
-    // The page in a web view, its feeds and the models' download, for the Mac
+    // Diorama: the models on the frames a server answers, the page that draws
+    // the drive, and the scene the apps draw it from.
+    // Optimised in a debug build too, as JetlinkDioramaUI is: the scene steps
+    // the road map cell by cell at 20 Hz, about 50 times slower unoptimised.
+    .target(
+      name: "JetlinkDiorama", dependencies: ["JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")],
+      swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
+    // The scene drawn in Metal, its feeds and the models' download, for the Mac
     // and iPhone apps alike; it compiles to nothing where there is no SwiftUI.
-    .target(name: "JetlinkDioramaUI", dependencies: ["JetlinkDiorama", "JetlinkRegistry", "JetlinkServer"]),
+    .target(
+      name: "JetlinkDioramaUI", dependencies: ["JetlinkDiorama", "JetlinkRegistry", "JetlinkServer"],
+      swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
     // CryptoExtras for PBKDF2, on every platform: CommonCrypto's on Apple's,
     // BoringSSL's elsewhere.
     .target(
