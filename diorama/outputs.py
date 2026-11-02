@@ -17,10 +17,8 @@ X_IDXS = 192.0 * (np.arange(IDX_N) / 32) ** 2
 PLAN_WIDTH, POSE_WIDTH = 15, 6
 LEAD_MHP_N, LEAD_MHP_SELECTION, LEAD_TRAJ_LEN, LEAD_WIDTH = 2, 3, 6, 4
 
-# The heads Diorama draws from, in the order a drive packet carries them, and
-# the ones the offline calibration reads besides.
+# The heads Diorama draws from, in the order a drive packet carries them.
 DRIVE_FIELDS = ('plan', 'lane_lines', 'lane_lines_prob', 'road_edges', 'lead', 'lead_prob', 'pose')
-CALIB_FIELDS = ('pose', 'road_transform', 'wide_from_device_euler')
 
 
 def _exp(x):

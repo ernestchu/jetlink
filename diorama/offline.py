@@ -25,38 +25,11 @@ import numpy as np
 
 from diorama import packets
 from diorama.driving import DrivingModel, providers
-from diorama.outputs import CALIB_FIELDS, DRIVE_FIELDS, parse
-from diorama.route import FPS, Route, euler_from_rot, rot_from_euler
+from diorama.outputs import DRIVE_FIELDS
+from diorama.route import FPS, Route
 
-CAMERA_HEIGHT = 1.22  # openpilot's, when the model never says
+CAMERA_HEIGHT = 1.22  # openpilot's
 WARMUP = 100  # frames of history the driving model gets before the first one kept
-
-
-def calibrate(route: Route, model: DrivingModel, frames: int, passes: int = 2) -> tuple[np.ndarray, float]:
-  """calibrationd's estimate from the model's own pose, batch style: frames driven straight at speed say where
-  straight ahead is in the camera. Each pass warps with the last pass's answer. Also the camera's height from
-  road_transform where the model is sure of it."""
-  rpy, height = np.zeros(3), CAMERA_HEIGHT
-  for i in range(passes):
-    model.reset()
-    rpys, heights = [], []
-    for _k, _f, warped in route.warped(rpy, 0, frames):
-      out = parse(model.step(warped), model.slices, CALIB_FIELDS)
-      trans, rot, trans_std = out['pose'][:3], out['pose'][3:], out['pose_stds'][:3]
-      if trans[0] > 15 * 0.44704 and abs(rot[2]) < np.radians(2) and np.arctan2(trans_std[1], trans[0]) < np.radians(0.25):
-        obs = np.array([0.0, -np.arctan2(trans[2], trans[0]), np.arctan2(trans[1], trans[0])])
-        rpys.append(euler_from_rot(rot_from_euler(rpy) @ rot_from_euler(obs)))
-        if 'road_transform' in out and out['road_transform_stds'][2] < np.exp(-3.5):
-          heights.append(out['road_transform'][2])
-    if not rpys:
-      print('calibration: never straight at speed in the first '
-            f'{frames / FPS:.0f} s; using the camera as mounted (pass --rpy to set it)')
-      return rpy, height
-    rpy = np.mean(rpys, axis=0)
-    height = float(np.mean(heights)) if heights else CAMERA_HEIGHT
-    print(f'calibration pass {i + 1}: rpy {np.degrees(rpy).round(2).tolist()} deg, height {height:.2f} m, '
-          f'{len(rpys)} frames straight at speed')
-  return rpy, height
 
 
 class Models:
@@ -92,16 +65,14 @@ def footage_encoder(path: Path, size: tuple[int, int], width: int = 960) -> subp
 
 
 def run(paths: list[Path], onnx: str, models_dir: Path, out: Path, start_s: float = 0.0, seconds: float | None = None,
-        device: str = 'auto', rpy: list[float] | None = None, calib_s: float = 60.0, seg_every: int = 2,
+        device: str = 'auto', rpy: list[float] | None = None, seg_every: int = 2,
         rhd: bool = False) -> Path:
   route = Route.open(paths)
   print(f'{len(route.segments)} segments of {route.segments[0].name.rsplit("--", 1)[0]}, camera {route.size[0]}x{route.size[1]}')
   model = DrivingModel(onnx, device, rhd)
   models = Models(models_dir, device)
-  if rpy is not None:
-    rpy, height = np.asarray(rpy, float), CAMERA_HEIGHT
-  else:
-    rpy, height = calibrate(route, model, int(calib_s * FPS))
+  # the camera as given (radians), else as mounted: never estimated from the drive
+  rpy, height = np.asarray(rpy if rpy is not None else (0.0, 0.0, 0.0), float), CAMERA_HEIGHT
   start = int(round(start_s * FPS))
   count = None if seconds is None else int(round(seconds * FPS))
   first = max(start - WARMUP, 0)

@@ -7,9 +7,9 @@ See the LICENSE file in the root directory for more details.
 A recorded drive as the comma's modeld would see it: the segments' road and
 wide camera files decoded in step, and each frame warped to the driving
 model's two 512x256 frames and packed into the six planes an INFER_REQ
-carries. The warp is openpilot's (common/transformations), with the
-calibration estimated from the model's own pose output the way calibrationd
-does it, so a route needs only its video files.
+carries. The warp is openpilot's (common/transformations), with the camera's
+calibration as given (0 0 0, the camera as mounted, by default), so a route
+needs only its video files.
 """
 from __future__ import annotations
 
@@ -38,10 +38,6 @@ def rot_from_euler(rpy) -> np.ndarray:
   ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
   rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
   return rz @ ry @ rx
-
-
-def euler_from_rot(R) -> np.ndarray:
-  return np.array([np.arctan2(R[2, 1], R[2, 2]), -np.arcsin(np.clip(R[2, 0], -1, 1)), np.arctan2(R[1, 0], R[0, 0])])
 
 
 def _model_frame(fl, cy):

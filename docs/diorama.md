@@ -92,8 +92,8 @@ python3 -m diorama replay ~/drives/<route>--{3,4,5} \
   `--start 20 --seconds 30` plays 30 s from 20 s in.
 - **Once:** leave out `--loop` to stop at the end.
 - **Another computer:** give its address as `--host`. Its server needs `--listen`.
-- **Calibration:** the replay estimates the camera's from the drive's first
-  minute. `--rpy ROLL PITCH YAW` (radians) sets it instead, and starts sooner.
+- **Calibration:** the camera is taken as mounted (`--rpy 0 0 0`).
+  `--rpy ROLL PITCH YAW` (radians) gives the car's own, if you know it.
 
 ### Watch it
 
@@ -186,8 +186,9 @@ python3 -m diorama view ~/diorama-drive
 ```
 
 The viewer opens in your browser, with play, pause and seek (Space plays and
-pauses). `--start` and `--seconds` pick a part of the drive, and `--device cuda`,
-`coreml` or `cpu` where it runs.
+pauses). `--start` and `--seconds` pick a part of the drive, `--rpy` the
+camera's calibration as for a replay, and `--device cuda`, `coreml` or `cpu`
+where it runs.
 
 ## Options
 

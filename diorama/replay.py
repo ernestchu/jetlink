@@ -22,8 +22,7 @@ import numpy as np
 from jetlink.client import JetlinkClient
 from jetlink.spec import sha256_file
 
-from diorama.driving import ACTION_T, DrivingModel
-from diorama.offline import calibrate
+from diorama.driving import ACTION_T
 from diorama.route import FPS, Route
 
 
@@ -39,12 +38,9 @@ def packed_scalars(spec, rhd: bool = False) -> np.ndarray:
 
 
 def replay(paths: list[Path], onnx: str, host: str, port: int, start_s: float = 0.0, seconds: float | None = None,
-           rpy: list[float] | None = None, calib_s: float = 60.0, device: str = 'auto', rhd: bool = False, loop: bool = False) -> None:
+           rpy: list[float] | None = None, rhd: bool = False, loop: bool = False) -> None:
   route = Route.open(paths)
-  if rpy is None:
-    print('estimating the calibration with the model here first (pass --rpy to skip)')
-    rpy, _ = calibrate(route, DrivingModel(onnx, device, rhd), int(calib_s * FPS))
-  rpy = np.asarray(rpy, float)
+  rpy = np.asarray(rpy if rpy is not None else (0.0, 0.0, 0.0), float)  # the camera as given, else as mounted
   client = JetlinkClient.open_tcp(host, port)
   hello = client.hello()
   print(f"server: {hello.get('backend')} {hello.get('runtime_version')} on {hello.get('device')}")

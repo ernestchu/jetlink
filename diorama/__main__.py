@@ -33,8 +33,8 @@ def main(argv: list[str] | None = None) -> int:
   r.add_argument('--start', type=float, default=0.0, help='seconds into the drive')
   r.add_argument('--seconds', type=float, help='how much of it (default: to the end)')
   r.add_argument('--device', choices=('auto', 'cuda', 'coreml', 'cpu'), default='auto')
-  r.add_argument('--rpy', type=float, nargs=3, metavar=('ROLL', 'PITCH', 'YAW'), help='calibration in radians, instead of estimating it')
-  r.add_argument('--calib-seconds', type=float, default=60.0, help='how much of the drive the calibration estimate reads')
+  r.add_argument('--rpy', type=float, nargs=3, metavar=('ROLL', 'PITCH', 'YAW'), default=[0.0, 0.0, 0.0],
+                 help="the camera's calibration in radians (default 0 0 0: as mounted)")
   r.add_argument('--rhd', action='store_true', help='left-hand traffic (the driver sits on the right)')
 
   p = sub.add_parser('replay', help="play a recorded drive into a running jetlink server, as a comma would, for its live page")
@@ -44,9 +44,8 @@ def main(argv: list[str] | None = None) -> int:
   p.add_argument('--port', type=int, default=5599)
   p.add_argument('--start', type=float, default=0.0)
   p.add_argument('--seconds', type=float)
-  p.add_argument('--rpy', type=float, nargs=3, metavar=('ROLL', 'PITCH', 'YAW'))
-  p.add_argument('--calib-seconds', type=float, default=60.0)
-  p.add_argument('--device', choices=('auto', 'cuda', 'coreml', 'cpu'), default='auto', help='for the calibration estimate')
+  p.add_argument('--rpy', type=float, nargs=3, metavar=('ROLL', 'PITCH', 'YAW'), default=[0.0, 0.0, 0.0],
+                 help="the camera's calibration in radians (default 0 0 0: as mounted)")
   p.add_argument('--rhd', action='store_true')
   p.add_argument('--loop', action='store_true', help='start over at the end')
 
@@ -66,11 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f'wrote {args.out}')
   elif args.cmd == 'run':
     from diorama.offline import run
-    run(args.segments, args.model, args.models, args.out, args.start, args.seconds, args.device, args.rpy, args.calib_seconds, rhd=args.rhd)
+    run(args.segments, args.model, args.models, args.out, args.start, args.seconds, args.device, args.rpy, rhd=args.rhd)
   elif args.cmd == 'replay':
     from diorama.replay import replay
-    replay(args.segments, args.model, args.host, args.port, args.start, args.seconds, args.rpy, args.calib_seconds, args.device,
-           args.rhd, args.loop)
+    replay(args.segments, args.model, args.host, args.port, args.start, args.seconds, args.rpy, args.rhd, args.loop)
   elif args.cmd == 'assets':
     from diorama.assets import RESOURCES, write_library
     out = args.out or RESOURCES / 'diorama-assets.bin'

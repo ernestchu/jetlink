@@ -21,7 +21,7 @@ import pytest
 
 from diorama import packets
 from diorama.outputs import IDX_N, LEAD_MHP_N, LEAD_MHP_SELECTION, LEAD_TRAJ_LEN, LEAD_WIDTH, X_IDXS, parse
-from diorama.route import euler_from_rot, rot_from_euler, warp_matrix
+from diorama.route import rot_from_euler, warp_matrix
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / 'JetlinkKit/Sources/JetlinkDiorama/Resources/diorama-engine.js'
@@ -83,10 +83,10 @@ def test_parse_heads():
   assert np.allclose(out['lane_lines_prob'], 0.5)
 
 
-def test_euler_round_trip_and_the_warp():
-  rpy = np.array([0.01, -0.03, 0.02])
-  assert np.allclose(euler_from_rot(rot_from_euler(rpy)), rpy)
-  # uncalibrated, the narrow frame's principal point is the camera's centre row and column
+def test_the_warp():
+  R = rot_from_euler(np.array([0.01, -0.03, 0.02]))
+  assert np.allclose(R @ R.T, np.eye(3)) and np.isclose(np.linalg.det(R), 1)
+  # at the default calibration (0 0 0, as mounted), the narrow frame's principal point is the camera's centre
   M = warp_matrix(np.zeros(3), 2648.0, (1928, 1208), big=False)
   p = M @ np.array([256.0, 47.6, 1.0])
   assert np.allclose(p[:2] / p[2], [964, 604])
