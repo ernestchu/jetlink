@@ -433,8 +433,8 @@ public final class DioramaScene {
     public let pose: SIMD3<Double>
     /// Crosswalk bars, in the world.
     public let stripes: [[SIMD2<Double>]]
-    /// 0 the road view behind the car, 1 bird's-eye.
-    public let view: Double
+    /// 0 the road view behind the car, 1 bird's-eye; and while bird's-eye, why (DioramaViewChooser's cue), or "".
+    public let view: Double, viewWhy: String
     /// Speed (m/s), acceleration (m/s²), the lead's distance.
     public let speed: Double, accel: Double, leadDistance: Double?
   }
@@ -444,7 +444,9 @@ public final class DioramaScene {
     public init() {}
   }
 
-  public var bevBelow = 20.0, roadAbove = 21.0, panSeconds = 3.0
+  public var panSeconds = 3.0
+  /// What picks the road view or bird's-eye; its numbers can be changed before a drive starts.
+  public var viewOptions = DioramaViewChooser.Options()
 
   public private(set) var meta: DioramaMeta?
   public private(set) var cam: DioramaFrameCamera?
@@ -459,7 +461,8 @@ public final class DioramaScene {
   private var trail = EgoTrail()
   private var pendingSeg: DioramaSegMessage?
   private var stripes: [[SIMD2<Double>]] = [], stripesFrame = -1
-  private var speed: Double?, view: Double?, target: Double?
+  private var speed: Double?, view: Double?
+  private var chooser = DioramaViewChooser()
 
   public init() {}
 
@@ -474,7 +477,7 @@ public final class DioramaScene {
     stripesFrame = -1
     speed = nil
     view = nil
-    target = nil
+    chooser = DioramaViewChooser(viewOptions)
     frame = -1
     state = nil
     timing = Timing()
@@ -509,12 +512,15 @@ public final class DioramaScene {
 
     let n = Diorama.idxN, xs = Diorama.xIdxs
     let px = (0..<n).map { out.plan($0, 0) }, py = (0..<n).map { out.plan($0, 1) }, pz = (0..<n).map { out.plan($0, 2) }
+    let pv = (0..<n).map { out.plan($0, 3) }
     let moving = px[n - 1] > px[0] + 1
     let zpath: (Double) -> Double = moving ? { Diorama.interp($0, px, pz) } : { _ in 0 }
-    let laneY = (0..<n).map { (DioramaOutputs.line(out.laneLines, 1, $0, 0) + DioramaOutputs.line(out.laneLines, 2, $0, 0)) / 2 }
-    let slopes = (1..<n).map { (laneY[$0] - laneY[$0 - 1]) / (xs[$0] - xs[$0 - 1]) }
+    let laneY: [Double] = (0..<n).map { i -> Double in
+      (DioramaOutputs.line(out.laneLines, 1, i, 0) + DioramaOutputs.line(out.laneLines, 2, i, 0)) / 2
+    }
+    let slopes: [Double] = (1..<n).map { i -> Double in (laneY[i] - laneY[i - 1]) / (xs[i] - xs[i - 1]) }
     let slopeXs = Array(xs[1...])
-    let laneHeading = { (x: Double) in atan(Diorama.interp(x, slopeXs, slopes)) }
+    let laneHeading: (Double) -> Double = { x in atan(Diorama.interp(x, slopeXs, slopes)) }
 
     // the newest segmentation, into the road map from the pose it was seen at
     let segMsg = pendingSeg
@@ -546,20 +552,14 @@ public final class DioramaScene {
       }
     }
 
-    // road view at speed, bird's-eye below it, panning between the two
+    // road view or bird's-eye (DioramaViewChooser), panning between the two
     let v = out.plan(0, 3)
     let speed = self.speed.map { 0.9 * $0 + 0.1 * v } ?? v
     self.speed = speed
-    let mph = speed * Diorama.mph
-    if target == nil {
-      target = mph < bevBelow ? 1 : 0
-    } else if target == 0 && mph < bevBelow {
-      target = 1
-    } else if target == 1 && mph > roadAbove {
-      target = 0
-    }
+    let pose = SIMD3(pNow.x, pNow.y, pNow.yaw)
+    let target = chooser.step(chooser.cue(speed, px, py, pv, stripes, pose, lead), speed)
     let stepS = Diorama.dt / panSeconds
-    if let view, let target {
+    if let view {
       let sign: Double = target > view ? 1 : target < view ? -1 : 0
       self.view = Diorama.clamp(view + sign * stepS, min(view, target), max(view, target))
     } else {
@@ -568,8 +568,97 @@ public final class DioramaScene {
 
     state = State(
       frame: k, seconds: seconds, out: out, px: px, py: py, pz: pz, lead: lead,
-      pose: SIMD3(pNow.x, pNow.y, pNow.yaw), stripes: stripes, view: Diorama.smoothstep(0, 1, view ?? 0),
+      pose: pose, stripes: stripes, view: Diorama.smoothstep(0, 1, view ?? 0), viewWhy: target == 1 ? chooser.why : "",
       speed: speed, accel: out.plan(0, 6), leadDistance: lead?.x)
+  }
+}
+
+/// Road view or bird's-eye: bird's-eye while the scene asks for a look around, the road view while cruising, as
+/// diorama-engine.js's ViewChooser, step for step. Cues, each a reason shown beside the view: stopped; a turn coming
+/// (the planned path bending within the next 40 m, and slowing for it or sharply: a sweeping ramp or bend taken at
+/// speed is not one); a crosswalk ahead within a few seconds, going slowly or slowing for it (not one driven straight
+/// over); a close lead in slow traffic; or simply slow. A cue must hold a moment before the view pans down, the road
+/// view comes back only after none for a while and at speed, and either view is held a few seconds at least.
+public struct DioramaViewChooser: Sendable {
+  public struct Options: Sendable {
+    public var stopped = 3.0, slow = 12.0, roadAbove = 18.0  // mph
+    // a bend of turnDeg within turnAhead m that the plan slows below turnSlow mph for, or one of turnSharp degrees;
+    // either only below turnBelow mph
+    public var turnDeg = 20.0, turnSlow = 22.0, turnSharp = 45.0, turnAhead = 40.0, turnBelow = 45.0
+    // a crosswalk within crossSeconds (at least crossMin m) ahead, below crossBelow mph or with the plan slowing below
+    // crossSlow mph before it
+    public var crossSeconds = 2.5, crossMin = 10.0, crossBelow = 20.0, crossSlow = 15.0
+    public var queueLead = 15.0, queueBelow = 25.0  // a lead within that many m in traffic below that many mph
+    public var enter = 0.4, leave = 3.0, hold = 3.0  // seconds
+    public init() {}
+  }
+
+  public let o: Options
+  /// 1 bird's-eye, 0 the road view; nil before the first frame.
+  public private(set) var target: Double?
+  /// The cue that last asked for bird's-eye.
+  public private(set) var why = ""
+  private var since = 0.0, cueFor = 0.0, calmFor = 0.0
+
+  public init(_ o: Options = Options()) { self.o = o }
+
+  /// The cue in this frame, or "": v in m/s; px, py the plan, pv its speeds; stripes in the world, pose the ego's
+  /// (x, y, yaw); lead or nil.
+  public func cue(
+    _ v: Double, _ px: [Double], _ py: [Double], _ pv: [Double], _ stripes: [[SIMD2<Double>]], _ pose: SIMD3<Double>,
+    _ lead: DioramaScene.Lead?
+  ) -> String {
+    let mph = v * Diorama.mph
+    if mph < o.stopped { return "stopped" }
+    if mph < o.turnBelow {
+      var j = 1
+      while j < px.count - 1 && px[j] < o.turnAhead { j += 1 }
+      let dx0 = px[1] - px[0], dx1 = px[j] - px[j - 1]
+      let h0 = atan2(py[1] - py[0], dx0 != 0 ? dx0 : 1e-3), h1 = atan2(py[j] - py[j - 1], dx1 != 0 ? dx1 : 1e-3)
+      let bend = abs(atan2(sin(h1 - h0), cos(h1 - h0))) * 180 / .pi
+      let slowest = pv[0...j].min()! * Diorama.mph
+      if px[j] - px[0] > 5 && (bend > o.turnSharp || (bend > o.turnDeg && slowest < o.turnSlow)) { return "turn" }
+    }
+    let reach = max(o.crossMin, v * o.crossSeconds)
+    var r = 0
+    while r < px.count - 1 && px[r] < reach { r += 1 }
+    let slowing = pv[0...r].min()! * Diorama.mph < o.crossSlow
+    if (mph < o.crossBelow || slowing) && !stripes.isEmpty {
+      let c = cos(pose.z), s = sin(pose.z)
+      for quad in stripes {
+        for w in quad {
+          let x = c * (w.x - pose.x) + s * (w.y - pose.y), y = -s * (w.x - pose.x) + c * (w.y - pose.y)
+          if x > 0 && x < reach && abs(y) < 12 { return "crossing" }
+        }
+      }
+    }
+    if let lead, lead.x < o.queueLead && mph < o.queueBelow { return "traffic" }
+    if mph < o.slow { return "slow" }
+    return ""
+  }
+
+  /// 1 for bird's-eye, 0 for the road view, after this frame's cue.
+  public mutating func step(_ cue: String, _ v: Double) -> Double {
+    let mph = v * Diorama.mph
+    since += Diorama.dt
+    cueFor = cue.isEmpty ? 0 : cueFor + Diorama.dt
+    calmFor = cue.isEmpty ? calmFor + Diorama.dt : 0
+    if !cue.isEmpty { why = cue }
+    guard let target else {
+      self.target = cue.isEmpty ? 0 : 1
+      since = 0
+      return self.target!
+    }
+    if since < o.hold { return target }
+    if target == 0 && cueFor >= o.enter {
+      self.target = 1
+      since = 0
+    } else if target == 1 && calmFor >= o.leave && mph > o.roadAbove {
+      self.target = 0
+      since = 0
+      why = ""
+    }
+    return self.target!
   }
 }
 

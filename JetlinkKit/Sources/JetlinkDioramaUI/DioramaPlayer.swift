@@ -35,7 +35,8 @@
       }
       if let s = scene.state {
         update.hud = DioramaPlayer.HUD(
-          speed: Int((s.speed * Diorama.mph).rounded()), lead: s.leadDistance.map { Int($0.rounded()) }, view: s.view, accel: s.accel)
+          speed: Int((s.speed * Diorama.mph).rounded()), lead: s.leadDistance.map { Int($0.rounded()) }, view: s.view, accel: s.accel,
+          why: s.viewWhy)
       }
       update.timing = scene.timing
       return update
@@ -49,8 +50,10 @@
   @Observable
   public final class DioramaPlayer {
     public struct HUD: Equatable, Sendable {
-      public var speed: Int, lead: Int?, view: Double, accel: Double
-      public var mode: String { view < 0.02 ? "ROAD VIEW" : view > 0.98 ? "BIRD'S-EYE" : "PANNING \(Int((view * 100).rounded()))%" }
+      public var speed: Int, lead: Int?, view: Double, accel: Double, why: String
+      public var mode: String {
+        (view < 0.02 ? "ROAD VIEW" : view > 0.98 ? "BIRD'S-EYE" : "PANNING \(Int((view * 100).rounded()))%") + (why.isEmpty ? "" : " · \(why.uppercased())")
+      }
     }
 
     struct Update: Sendable {

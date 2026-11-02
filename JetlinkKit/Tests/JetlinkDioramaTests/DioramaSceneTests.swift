@@ -200,7 +200,7 @@ struct DioramaSceneTests {
     #expect(seg.qmap[0] == 255 && seg.qmap[seg.qmap.count - 128] == SyntheticDrive.road)
   }
 
-  @Test("The scene follows the drive: the road view at speed, the bird's-eye view below 20 mph, a lead and a crosswalk")
+  @Test("The scene follows the drive: the road view at speed, bird's-eye when slow or at a crosswalk, a lead and a crosswalk")
   func steps() {
     let scene = DioramaScene()
     var views: [Double] = [], leads = 0, stripes = 0
