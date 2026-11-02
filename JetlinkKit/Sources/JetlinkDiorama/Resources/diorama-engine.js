@@ -3,7 +3,7 @@
 // This file is part of jetlink and is licensed under the MIT License.
 // See the LICENSE file in the root directory for more details.
 //
-// Diorama's engine: the server's messages (docs/diorama.md) in, the scene out.
+// Diorama's engine: the server's messages (docs/diorama-internals.md) in, the scene out.
 // The driving model's outputs give the path, lanes, road edges, lead and ego
 // motion; the segmentation gives the road surface, which a road map holds
 // around the car. The lead is drawn from each frame's own prediction, facing

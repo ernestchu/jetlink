@@ -7,7 +7,7 @@ See the LICENSE file in the root directory for more details.
 Diorama's messages, as the server streams them to a page and a recorded drive
 stores them: one byte of kind, then its payload, little-endian throughout.
 JetlinkDiorama's DioramaPackets.swift writes the same bytes and diorama.js
-reads them; docs/diorama.md has the table.
+reads them; docs/diorama-internals.md has the table.
 
     M  meta    JSON: the frame's camera, the drive fields and their float counts, the models' classes
     D  drive   u32 frame, f32 seconds, f32 model ms, f32[] the drive fields' raw outputs, in meta's order

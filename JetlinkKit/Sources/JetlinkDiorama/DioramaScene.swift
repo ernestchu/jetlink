@@ -1,6 +1,6 @@
 import Foundation
 
-/// Diorama's scene from the server's messages (docs/diorama.md), for the apps
+/// Diorama's scene from the server's messages (docs/diorama-internals.md), for the apps
 /// to draw natively: diorama-engine.js in Swift, step for step, so the page
 /// and the apps draw the same drive. The driving model's outputs give the
 /// path, lanes, road edges, lead and ego motion; the segmentation gives the

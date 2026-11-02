@@ -1,6 +1,6 @@
 import Foundation
 
-/// Diorama's messages (docs/diorama.md), byte for byte what `diorama/packets.py`
+/// Diorama's messages (docs/diorama-internals.md), byte for byte what `diorama/packets.py`
 /// writes into a recorded drive and diorama-engine.js reads: one byte of
 /// kind, then the payload, little-endian.
 public enum DioramaPackets {

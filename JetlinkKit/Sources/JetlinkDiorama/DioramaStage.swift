@@ -9,7 +9,7 @@ import Synchronization
 /// Every frame the server answers, the stage takes the driving model's
 /// outputs and, every other frame, the warped narrow image (`FrameObserver`).
 /// On threads of its own it runs the segmentation on that image, and hands
-/// the messages of docs/diorama.md to whoever watches: the web page's event stream, the Mac app's view. The page does
+/// the messages of docs/diorama-internals.md to whoever watches: the web page's event stream, the Mac app's view. The page does
 /// the rest in the browser.
 ///
 /// The comma comes first. Nothing runs while nobody watches; the frame hook
