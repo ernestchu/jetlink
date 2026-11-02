@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
   e = sub.add_parser('export', help="export Diorama's models to ONNX (needs torch and transformers)")
   e.add_argument('--out', type=Path, required=True, help='folder for diorama_seg.onnx and diorama.json')
   e.add_argument('--coreml', action='store_true', help="also native CoreML packages, which the Mac app runs (needs coremltools)")
+  e.add_argument('--seg', choices=('r50-semantic', 'swin-l-panoptic'), default='r50-semantic',
+                 help='the segmentation model (default r50-semantic; swin-l-panoptic is the larger one Diorama used before)')
 
   r = sub.add_parser('run', help="run a recorded drive through the driving model and Diorama's models")
   r.add_argument('segments', type=Path, nargs='+',
@@ -58,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
   args = ap.parse_args(argv)
   if args.cmd == 'export':
     from diorama.export import export
-    export(args.out, coreml=args.coreml)
+    export(args.out, seg=args.seg, coreml=args.coreml)
     print(f'wrote {args.out}')
   elif args.cmd == 'run':
     from diorama.offline import run

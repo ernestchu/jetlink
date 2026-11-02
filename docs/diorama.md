@@ -22,7 +22,7 @@ road all around the car. Everywhere Diorama runs, live or from a recording,
 it takes the cameras' calibration from the comma: until the comma has
 calibrated (its first drive), Diorama waits and says so.
 
-Diorama needs a segmentation model, about 900 MB (510 MB as the Mac's CoreML
+Diorama needs a segmentation model, about 180 MB (90 MB as the Mac's CoreML
 version). It runs on the GPU only while someone watches, and steps aside
 whenever the driving model needs the GPU.
 
@@ -162,7 +162,7 @@ below use it where it was built.
 1. Open **Jetlink** (`open ~/jetlink/macos/build/Jetlink.app`). Its server
    starts with the app.
 2. Click **Diorama** in the sidebar (⌘5), then **Download Models…** and
-   **Agree and Download**. It fetches about 510 MB once, and the server picks
+   **Agree and Download**. It fetches about 90 MB once, and the server picks
    it up without a restart.
 3. With the comma connected, **Diorama** shows the drive.
 
@@ -228,7 +228,7 @@ The iPhone app's **Diorama** tab can show the drive two ways, picked at its top:
 
   The Mac's Diorama toolbar shows who is watching, and can disconnect them.
 - **This iPhone:** the phone's own server, with the comma on its cable, runs
-  the model too. Tap **Turn On** in the tab to download it (510 MB). It uses
+  the model too. Tap **Turn On** in the tab to download it (90 MB). It uses
   the phone's GPU beside the driving model.
 
 The screen stays on while the tab shows the drive.
@@ -284,8 +284,10 @@ uvx --from huggingface_hub hf download ernestchu/jetlink-diorama \
 
 ## Credits
 
-- **Segmentation:** Mask2Former by Meta (MIT). Its weights were trained on
-  Mapillary Vistas, whose terms allow non-commercial use only.
+- **Segmentation:** Mask2Former by Meta, ResNet-50, from its model zoo (model
+  49189528_1). Its code is MIT; its weights are under
+  [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), and were
+  trained on Mapillary Vistas, whose terms allow non-commercial use only.
 - **The car:** ["2021 Tesla Model Y"](https://sketchfab.com/3d-models/2021-tesla-model-y-59e2ead369984b1a85c800ff6cf6789d)
   by tonielpro520, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/),
   recoloured, without its badges, interior and brakes.

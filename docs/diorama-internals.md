@@ -9,8 +9,15 @@ see [Diorama](diorama.md).
 The comma already sends the server two things each frame: the warped narrow
 and wide camera images and the driving model's inputs. The server answers with
 the model's outputs. Diorama adds one model that runs on a warped image:
-Mask2Former (Swin-L, Mapillary Vistas panoptic), on every other frame (10 Hz).
-It segments the road surface, paint, crosswalks, curbs and sidewalks.
+Mask2Former (ResNet-50, Mapillary Vistas semantic), on every other frame
+(10 Hz). It segments the road surface, paint, crosswalks, curbs and
+sidewalks, and the vehicles the lead is checked against. A semantic model is
+enough: only the car ahead is drawn, and where it stands is the bottom of the
+vehicle pixels across its width below where the model puts it, not one
+instance's. Against the Swin-L panoptic model Diorama used before, it runs in
+under half the time on a 4090 and three quarters on a Mac, is a fifth the
+size, and drew the two recorded drives it was tried on the same: the same
+view switches, the lead on as many frames, and crosswalks as full.
 
 It segments the narrow image in the road view, which sees furthest ahead, and
 the wide image in bird's-eye, which sees the road close around the car: the
@@ -91,7 +98,12 @@ python3 -m pip install torch transformers onnx
 python3 -m diorama export --out ~/diorama-models
 ```
 
-This writes `diorama_seg.onnx` (910 MB) and `diorama.json`.
+This writes `diorama_seg.onnx` (177 MB) and `diorama.json`. It takes the
+model from `ernestchu/jetlink-diorama` (`r50-semantic/mask2former`): Mask2Former's
+own checkpoint for it (model id 49189528_1) is Detectron2's, and
+`python -m diorama.convert_r50` converts it to `transformers`, as there.
+`--seg swin-l-panoptic` exports the Swin-L panoptic model Diorama used before
+(910 MB).
 
 **Or download it** from the export the Mac app uses, without PyTorch. A
 Jetson or Linux PC needs only the ONNX graph, not the CoreML package, and each
@@ -105,10 +117,9 @@ A folder from an older export that also has DD3D still works; its DD3D graph
 is not run.
 
 **For a Mac,** add `--coreml`. It also writes the model as a native CoreML
-package, `diorama_seg.mlpackage` (513 MB), which the Mac app and
-`jetlink-server` on a Mac run instead of the ONNX graph: about 3.5 times as
-fast. It needs `coremltools` and the newest
-PyTorch it supports:
+package, `diorama_seg.mlpackage` (91 MB), which the Mac app and
+`jetlink-server` on a Mac run instead of the ONNX graph. It needs
+`coremltools` and the newest PyTorch it supports:
 
 ```bash
 python3 -m pip install "torch==2.7.0" "torchvision==0.22.0" transformers onnx coremltools
@@ -117,9 +128,10 @@ python3 -m diorama export --out ~/diorama-models --coreml
 
 **License:**
 
-Mask2Former's code is MIT. The Mapillary Vistas weights come from Meta through
-Hugging Face, and the dataset they were trained on has its own terms. Check
-them before you share the exported files.
+Mask2Former's code is MIT; its model zoo's weights, these among them, are
+under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), and
+were trained on Mapillary Vistas, which has its own terms (non-commercial
+use too). Check them before you share the exported files.
 
 **The car:** the page draws every car as
 ["2021 Tesla Model Y"](https://sketchfab.com/3d-models/2021-tesla-model-y-59e2ead369984b1a85c800ff6cf6789d)
@@ -225,7 +237,7 @@ the cable out. Wireless CarPlay sharing the radio has not been tried yet.
 ## The model on an iPhone
 
 With **This iPhone** turned on, the tab downloads the CoreML package, about
-510 MB, after the same licence sheet as the Mac's, into the app's Application
+90 MB, after the same licence sheet as the Mac's, into the app's Application
 Support (out of iCloud backups). The phone's server then runs it on the GPU
 on the frames it serves, while the tab is open.
 
@@ -239,20 +251,20 @@ frame times beside it have not been measured on an iPhone yet.
 
 | Host | Segmentation | Notes |
 | --- | ---: | --- |
-| RTX 4090, TensorRT fp16 | 5.0 ms | outputs match onnxruntime fp32 on 99.5% of pixels (98.2% at worst over 8 frames) |
-| RTX 4090, TensorRT 11 in `jetlink-server` | 9.8 ms | the server's strongly typed build keeps the graph's fp32; the driving model's round trip stayed at 2.8 ms p50 with the page open |
-| RTX 4090, TensorRT 11 in `jetlink-server`, `--diorama-every-frame` | 10.0 ms a run, every frame (20.0 Hz) | one in flight is enough; the driving model's round trip stayed at 3.0 ms p50, 3.5 ms p99 (3.1 and 3.7 at 10 Hz). `--diorama-in-flight 2` loads a second engine from the same plan (1 GB more GPU memory) and changes nothing here |
-| RTX 4090, onnxruntime CUDA | 23 ms | `python -m diorama run` |
-| CPU (onnxruntime) | 685 ms | works, at a few frames a second |
-| M5 Pro Mac, native CoreML on the GPU | 53 ms | the app (`--coreml`). Query map matches the ONNX graph on 99.9% of pixels |
-| M5 Pro Mac, native CoreML on the GPU, two at once | 38.9 ms a frame (25.7 Hz), each run about 80 ms | the app's **Segment every frame (20 Hz)** |
-| M5 Pro Mac, onnxruntime CoreML on the GPU | 185 ms | the ONNX graph: about 5 Hz. First compile about 2 minutes |
-| M5 Pro Mac, onnxruntime CPU | 275 ms | |
+| RTX 4090, TensorRT 11 in `jetlink-server` | 4.5 ms | two recorded drives replayed at twice real time; the driving model's round trip stayed at 2.8 ms p50, 2.9 ms p99 with the page open |
+| RTX 4090, onnxruntime CUDA | 8.8 ms | `python -m diorama run` |
+| CPU (onnxruntime, 16-core Threadripper PRO 5955WX) | 176 ms | works, at about 5 frames a second |
+| M5 Pro Mac, native CoreML on the GPU | 43 ms | `--coreml`: all 1215 operations on the GPU. Its class map matches the ONNX graph on 99.87% of pixels |
+| M5 Pro Mac, native CoreML on the GPU, two at once | 26.4 ms a frame (37.9 Hz), each run about 52 ms | the app's **Segment every frame (20 Hz)**: about half the GPU's time |
+| M5 Pro Mac, the app replaying a drive at 20 Hz | 44–46 ms a run | the driving model on the Neural Engine at 12.6–12.9 ms beside it |
 | Jetson Orin | not measured yet | |
 | iPhone, native CoreML on the GPU | not measured yet | at most half the GPU's time |
 
-The Mac's and the 4090's driving-model latencies were measured with DD3D
-running too, before it was dropped.
+The Swin-L panoptic model (`--seg swin-l-panoptic`) took 10.0 ms in
+`jetlink-server` on the 4090, 24 ms on onnxruntime CUDA, 685 ms on the CPU,
+and 53–55 ms on the M5 Pro's GPU (37.5–38.9 ms a frame two at once). Its
+4090 and Mac driving-model latencies were measured with DD3D running too,
+before it was dropped.
 
 The page's engine takes about 3 ms of a browser frame (5–7 ms at the 95th
 percentile, 22 ms at most when it re-cuts crosswalk stripes).

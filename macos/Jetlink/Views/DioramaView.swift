@@ -43,7 +43,7 @@ struct DioramaView: View {
             Text(server.runState == .serving ? "Restart the server to load the models." : "Start the server to see the drive.")
           } else {
             Text(
-              "Diorama draws the drive with a segmentation model, about 510 MB, that runs on the GPU only while this view is open. Download it into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported it to in Settings."
+              "Diorama draws the drive with a segmentation model, about 90 MB, that runs on the GPU only while this view is open. Download it into \(settings.dioramaFolder.path(percentEncoded: false)), or choose a folder you exported it to in Settings."
             )
           }
           if hasModels, let problem = server.dioramaProblem {

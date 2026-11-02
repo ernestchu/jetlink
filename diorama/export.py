@@ -6,7 +6,11 @@ See the LICENSE file in the root directory for more details.
 
 Exports Diorama's perception model to ONNX, in the form every jetlink
 backend runs (TensorRT, onnxruntime with CoreML, onnxruntime's CPU provider):
-diorama_seg.onnx, Mask2Former (Swin-L, Mapillary Vistas panoptic).
+diorama_seg.onnx, Mask2Former with a ResNet-50 backbone, trained for Mapillary
+Vistas semantic segmentation (Mask2Former's model 49189528_1, converted to
+transformers by diorama/convert_r50.py; ernestchu/jetlink-diorama keeps the
+result). `--seg swin-l-panoptic` exports the larger Swin-L panoptic model
+Diorama used before.
 
 It takes the frame exactly as the comma sends it in an INFER_REQ: the narrow
 camera warped to the driving model's 512x256 frame and packed into six
@@ -16,11 +20,13 @@ copies the bytes in and the numbers out, and every output is float32 with a
 fixed shape:
 
     qmap    (1, 128, 256)  query index per pixel at half resolution, 255 for none
-    label   (200,)         each query's Mapillary class
-    score   (200,)         its score, 0 when it was dropped
+    label   (queries,)     each query's Mapillary class
+    score   (queries,)     its score, 0 when it was dropped
 
-The thresholds are baked in at export and written to diorama.json next to the
-graph, with the class names and the camera frame.
+A semantic model's "queries" are its 65 classes: each pixel's query is its
+class, each label the class itself, each score 1. diorama.json, next to the
+graph, says which (`semantic`), with the class names, the camera frame and a
+panoptic model's thresholds.
 
     python -m diorama export --out ~/diorama-models
 """
@@ -31,7 +37,12 @@ from pathlib import Path
 
 import numpy as np
 
-SEG_MODEL = 'facebook/mask2former-swin-large-mapillary-vistas-panoptic'
+# name: (Hugging Face repo, folder in it, semantic)
+SEG_MODELS = {
+  'r50-semantic': ('ernestchu/jetlink-diorama', 'r50-semantic/mask2former', True),
+  'swin-l-panoptic': ('facebook/mask2former-swin-large-mapillary-vistas-panoptic', '', False),
+}
+SEG_MODEL = 'r50-semantic'
 
 # The driving model's narrow frame: openpilot's medmodel intrinsics at 512x256.
 FRAME_W, FRAME_H = 512, 256
@@ -153,13 +164,14 @@ def _rank5_deformable_attention():
   modeling_mask2former.Mask2FormerPixelDecoderEncoderMultiscaleDeformableAttention.forward = forward
 
 
-def seg_module(model_id: str = SEG_MODEL, semantic: bool = False):
+def seg_module(name: str = SEG_MODEL):
   torch, nn = _torch()
   from transformers import Mask2FormerForUniversalSegmentation
 
   _rank5_swin_windows()
   _rank5_deformable_attention()
-  net = Mask2FormerForUniversalSegmentation.from_pretrained(model_id).eval()
+  model_id, folder, semantic = SEG_MODELS[name]
+  net = Mask2FormerForUniversalSegmentation.from_pretrained(model_id, subfolder=folder).eval()
   _float32_reference_points(net)
   labels = {int(k): v for k, v in net.config.id2label.items()}
   is_thing = torch.tensor([labels[i] in THING for i in range(len(labels))])
@@ -208,7 +220,7 @@ def seg_module(model_id: str = SEG_MODEL, semantic: bool = False):
       return cls.float()[None], zero + self.classes, zero + 1
 
   meta = {
-    'model': model_id, 'labels': [labels[i] for i in range(len(labels))],
+    'model': f'{model_id}/{folder}' if folder else model_id, 'labels': [labels[i] for i in range(len(labels))],
     'road_class': {name: ROAD_CLASS[name] for name in labels.values() if name in ROAD_CLASS},
     'things': {name: THING[name] for name in labels.values() if name in THING},
     'ds': SEG_DS,
@@ -265,18 +277,18 @@ def export_coreml(module, path: Path, output_names: list[str]):
   model.save(str(path))
 
 
-def export(out: Path, seg_model: str = SEG_MODEL, coreml: bool = False, semantic: bool = False):
+def export(out: Path, seg: str = SEG_MODEL, coreml: bool = False):
   out.mkdir(parents=True, exist_ok=True)
   meta = {
     'version': 1,
     'frame': {'w': FRAME_W, 'h': FRAME_H, 'f': MEDMODEL_FL, 'cx': FRAME_W / 2, 'cy': MEDMODEL_CY},
     'input': {'name': 'frame', 'shape': list(PACKED_SHAPE), 'type': 'float16'},
   }
-  seg, meta['seg'] = seg_module(seg_model, semantic)
-  export_onnx(seg, out / 'diorama_seg.onnx', ['qmap', 'label', 'score'])
+  module, meta['seg'] = seg_module(seg)
+  export_onnx(module, out / 'diorama_seg.onnx', ['qmap', 'label', 'score'])
   meta['seg']['file'] = 'diorama_seg.onnx'
   if coreml:
-    export_coreml(seg, out / 'diorama_seg.mlpackage', ['qmap', 'label', 'score'])
+    export_coreml(module, out / 'diorama_seg.mlpackage', ['qmap', 'label', 'score'])
     meta['seg']['coreml'] = 'diorama_seg.mlpackage'
   (out / 'diorama.json').write_text(json.dumps(meta, indent=1) + '\n')
   return meta

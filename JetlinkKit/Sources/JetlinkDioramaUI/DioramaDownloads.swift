@@ -107,7 +107,7 @@
     }
   }
 
-  /// Before 510 MB comes down: what it is, where it goes, and whose terms it comes under.
+  /// Before about 90 MB comes down: what it is, where it goes, and whose terms it comes under.
   public struct DioramaLicenseSheet: View {
     let bytes: Int64
     /// Where it goes, as the user knows the place.
@@ -127,11 +127,11 @@
           .fixedSize(horizontal: false, vertical: true)
         VStack(alignment: .leading, spacing: 8) {
           Text(
-            "**Segmentation:** Mask2Former by Meta. Its code is under the MIT License; its weights were trained on Mapillary Vistas, whose terms allow non-commercial use only."
+            "**Segmentation:** Mask2Former by Meta. Its code is under the MIT License; its weights are under CC BY-NC 4.0, and were trained on Mapillary Vistas, whose terms allow non-commercial use only."
           )
           .fixedSize(horizontal: false, vertical: true)
           HStack(spacing: 14) {
-            Link("Mask2Former", destination: URL(string: "https://huggingface.co/facebook/mask2former-swin-large-mapillary-vistas-panoptic")!)
+            Link("Mask2Former", destination: URL(string: "https://github.com/facebookresearch/Mask2Former/blob/main/MODEL_ZOO.md")!)
             Link("Mapillary Vistas terms", destination: URL(string: "https://www.mapillary.com/dataset/vistas")!)
           }
         }

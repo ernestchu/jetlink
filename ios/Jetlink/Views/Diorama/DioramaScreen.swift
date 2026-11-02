@@ -144,7 +144,7 @@ struct DioramaOnPhone: View {
 
   /// What it costs, said once here and once in Settings.
   static let cost =
-    "Diorama runs a segmentation model, a 510 MB download, on this \(ThisDevice.name)'s GPU beside the driving model, while this tab is open. It warms the phone and drains the battery faster, and the driving model always comes first: Diorama pauses whenever a frame runs slow, and takes at most half the GPU's time. To keep the phone cool, run Jetlink on a Mac and watch it here instead."
+    "Diorama runs a segmentation model, a 90 MB download, on this \(ThisDevice.name)'s GPU beside the driving model, while this tab is open. It warms the phone and drains the battery faster, and the driving model always comes first: Diorama pauses whenever a frame runs slow, and takes at most half the GPU's time. To keep the phone cool, run Jetlink on a Mac and watch it here instead."
 
   private var downloads: DioramaDownloads { app.server.dioramaDownloads }
   private var hasModels: Bool { DioramaDownloads.present(in: PhoneSettings.dioramaFolder) }
@@ -167,7 +167,7 @@ struct DioramaOnPhone: View {
         Text("The model did not download: \(message)")
       default:
         if !hasModels {
-          Text("Diorama needs its segmentation model, about 510 MB. Download it over Wi-Fi.")
+          Text("Diorama needs its segmentation model, about 90 MB. Download it over Wi-Fi.")
         } else if let problem = app.server.dioramaProblem {
           Text(problem)
         } else {
