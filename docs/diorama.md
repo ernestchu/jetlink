@@ -321,6 +321,7 @@ frame times beside it have not been measured on an iPhone yet.
 | --- | ---: | --- |
 | RTX 4090, TensorRT fp16 | 5.0 ms | outputs match onnxruntime fp32 on 99.5% of pixels (98.2% at worst over 8 frames) |
 | RTX 4090, TensorRT 11 in `jetlink-server` | 9.8 ms | the server's strongly typed build keeps the graph's fp32; the driving model's round trip stayed at 2.8 ms p50 with the page open |
+| RTX 4090, TensorRT 11 in `jetlink-server`, `--diorama-every-frame` | 10.0 ms a run, every frame (20.0 Hz) | one in flight is enough; the driving model's round trip stayed at 3.0 ms p50, 3.5 ms p99 (3.1 and 3.7 at 10 Hz). `--diorama-in-flight 2` loads a second engine from the same plan (1 GB more GPU memory) and changes nothing here |
 | RTX 4090, onnxruntime CUDA | 23 ms | `python -m diorama run` |
 | CPU (onnxruntime) | 685 ms | works, at a few frames a second |
 | M5 Pro Mac, native CoreML on the GPU | 53 ms | the app (`--coreml`). Query map matches the ONNX graph on 99.9% of pixels |
