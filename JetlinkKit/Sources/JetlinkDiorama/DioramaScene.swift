@@ -399,9 +399,11 @@ public struct DioramaSeg: Sendable {
   /// Does the segmentation have a vehicle where the model puts the lead? The rear of the lead, (x, y) on the road
   /// at road height `road` (z down), seen from 0.2 to 1.4 m above it, within 2 query-map pixels either side; and
   /// that vehicle stands on the road at about the lead's distance (within 25%, or 3 m), so a car further on, seen
-  /// past empty road at the lead's distance, does not count. One whose bottom is cut off by the frame's edge counts.
+  /// past empty road at the lead's distance, does not count. Where it stands is the lowest of the vehicle's pixels
+  /// below the hit across a car's width (1.2 m either side: its wheels, where the road shows under its middle), each
+  /// column's run down from the hit's row: a vehicle behind it, in the same region of a semantic segmentation, is
+  /// higher and changes nothing. One whose bottom is cut off by the frame's edge counts.
   func seesVehicle(_ cam: DioramaFrameCamera, _ x: Double, _ y: Double, _ road: Double) -> Bool {
-    var hits = Set<UInt8>()
     var up = 0.2
     while up <= 1.41 {
       defer { up += 0.2 }
@@ -411,27 +413,22 @@ public struct DioramaSeg: Sendable {
       if cv < 0 || cv >= h { continue }
       let lo = max(cu - 2, 0), hi = min(cu + 2, w - 1)
       if lo > hi { continue }
-      for c in lo...hi {
-        let q = qmap[cv * w + c]
-        if q != 255, let t = qThing[Int(q)], t != "person" { hits.insert(q) }
+      guard
+        let q = (lo...hi).lazy.map({ self.qmap[cv * self.w + $0] }).first(where: { $0 != 255 && self.qThing[Int($0)].map { $0 != "person" } == true })
+      else { continue }
+      // the vehicle's bottom across a car's width
+      let half = Int((cam.f * 1.2 / depth / ds).rounded(.up))
+      var bottom = -1, at = cu
+      for c in stride(from: max(cu - half, 0), through: min(cu + half, w - 1), by: 1) where qmap[cv * w + c] == q {
+        var r = cv
+        while r + 1 < h && qmap[(r + 1) * w + c] == q { r += 1 }
+        if r > bottom {
+          bottom = r
+          at = c
+        }
       }
-    }
-    if hits.isEmpty { return false }
-    // each hit vehicle's lowest row, and the middle of that row
-    var bottom: [UInt8: (r: Int, c0: Int, c1: Int)] = [:]
-    for i in stride(from: w * h - 1, through: 0, by: -1) {
-      let q = qmap[i]
-      guard hits.contains(q) else { continue }
-      let r = i / w
-      if let b = bottom[q] {
-        if b.r == r { bottom[q]!.c0 = i % w }
-      } else {
-        bottom[q] = (r, i % w, i % w)
-      }
-    }
-    for (r, c0, c1) in bottom.values {
-      if r >= h - 1 { return true }
-      if let hit = cam.groundHit((Double(c0 + c1) / 2 + 0.5) * ds, Double(r + 1) * ds, road), abs(hit.0 - x) <= max(3, 0.25 * x) { return true }
+      if bottom >= h - 1 { return true }
+      if let hit = cam.groundHit((Double(at) + 0.5) * ds, Double(bottom + 1) * ds, road), abs(hit.0 - x) <= max(3, 0.25 * x) { return true }
     }
     return false
   }

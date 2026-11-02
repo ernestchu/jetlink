@@ -258,33 +258,34 @@
   // Does the segmentation have a vehicle where the model puts the lead? The rear of the lead, (x, y) on the road at
   // road height `road` (z down), seen from 0.2 to 1.4 m above it, within 2 query-map pixels either side; and that
   // vehicle stands on the road at about the lead's distance (within 25%, or 3 m), so a car further on, seen past
-  // empty road at the lead's distance, does not count. One whose bottom is cut off by the frame's edge counts.
+  // empty road at the lead's distance, does not count. Where it stands is the lowest of the vehicle's pixels below
+  // the hit across a car's width (1.2 m either side: its wheels, where the road shows under its middle), each
+  // column's run down from the hit's row: a vehicle behind it, in the same region of a semantic segmentation, is
+  // higher and changes nothing. One whose bottom is cut off by the frame's edge counts.
   function segSeesVehicle(cam, seg, x, y, road) {
     const { w, h, ds, qmap, qThing } = seg;
-    const hits = new Set();
     for (let up = 0.2; up <= 1.41; up += 0.2) {
       const [u, v, depth] = cam.project(x, y, road - up);
       if (depth <= 0) continue;
       const cu = Math.round(u / ds), cv = Math.floor(v / ds);
       if (cv < 0 || cv >= h) continue;
-      for (let c = Math.max(cu - 2, 0); c <= Math.min(cu + 2, w - 1); c++) {
-        const q = qmap[cv * w + c];
-        if (q !== 255 && qThing[q] && qThing[q] !== 'person') hits.add(q);
+      let q = 255;
+      for (let c = Math.max(cu - 2, 0); c <= Math.min(cu + 2, w - 1) && q === 255; c++) {
+        const k = qmap[cv * w + c];
+        if (k !== 255 && qThing[k] && qThing[k] !== 'person') q = k;
       }
-    }
-    if (!hits.size) return false;
-    // each hit vehicle's lowest row, and the middle of that row
-    const bottom = new Map();
-    for (let i = w * h - 1; i >= 0; i--) {
-      const q = qmap[i];
-      if (!hits.has(q)) continue;
-      const r = Math.floor(i / w), b = bottom.get(q);
-      if (!b) bottom.set(q, { r, c0: i % w, c1: i % w });
-      else if (b.r === r) b.c0 = i % w;
-    }
-    for (const { r, c0, c1 } of bottom.values()) {
-      if (r >= h - 1) return true;
-      const G = cam.groundHit(((c0 + c1) / 2 + 0.5) * ds, (r + 1) * ds, road);
+      if (q === 255) continue;
+      // the vehicle's bottom across a car's width
+      const half = Math.ceil(cam.f * 1.2 / depth / ds);
+      let bottom = -1, at = cu;
+      for (let c = Math.max(cu - half, 0); c <= Math.min(cu + half, w - 1); c++) {
+        if (qmap[cv * w + c] !== q) continue;
+        let r = cv;
+        while (r + 1 < h && qmap[(r + 1) * w + c] === q) r++;
+        if (r > bottom) { bottom = r; at = c; }
+      }
+      if (bottom >= h - 1) return true;
+      const G = cam.groundHit((at + 0.5) * ds, (bottom + 1) * ds, road);
       if (G && Math.abs(G[0] - x) <= Math.max(3, 0.25 * x)) return true;
     }
     return false;

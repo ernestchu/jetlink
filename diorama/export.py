@@ -153,7 +153,7 @@ def _rank5_deformable_attention():
   modeling_mask2former.Mask2FormerPixelDecoderEncoderMultiscaleDeformableAttention.forward = forward
 
 
-def seg_module(model_id: str = SEG_MODEL):
+def seg_module(model_id: str = SEG_MODEL, semantic: bool = False):
   torch, nn = _torch()
   from transformers import Mask2FormerForUniversalSegmentation
 
@@ -185,13 +185,35 @@ def seg_module(model_id: str = SEG_MODEL):
       qmap = torch.where(best > ASSIGN, q.float(), torch.full_like(best, 255.0))
       return qmap[None], label.float(), score
 
+  class Semantic(nn.Module):
+    """A semantic model's: each pixel's class, as Mask2Former's semantic inference makes it (the queries' class
+    probabilities weighted by their masks), in the panoptic graph's outputs: the class is the pixel's query, and
+    each query's label its class, with score 1."""
+    def __init__(self):
+      super().__init__()
+      self.net = net
+      self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255)
+      self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1) * 255)
+      self.register_buffer('classes', torch.arange(len(labels), dtype=torch.float32))
+
+    def forward(self, packed):
+      x = (unpack_rgb(packed.float()) - self.mean) / self.std
+      o = self.net(pixel_values=x)
+      size = (FRAME_H // SEG_DS, FRAME_W // SEG_DS)
+      m = torch.nn.functional.interpolate(o.masks_queries_logits.float(), size, mode='bilinear', align_corners=False)[0]
+      p = o.class_queries_logits[0].float().softmax(-1)[:, :-1]
+      cls = torch.einsum('qc,qhw->chw', p, m.sigmoid()).argmax(0)
+      return cls.float()[None], self.classes, torch.ones_like(self.classes)
+
   meta = {
     'model': model_id, 'labels': [labels[i] for i in range(len(labels))],
     'road_class': {name: ROAD_CLASS[name] for name in labels.values() if name in ROAD_CLASS},
     'things': {name: THING[name] for name in labels.values() if name in THING},
-    'thing_score': THING_SCORE, 'stuff_score': STUFF_SCORE, 'assign': ASSIGN, 'ds': SEG_DS,
+    'ds': SEG_DS,
   }
-  return Seg().eval(), meta
+  if semantic:
+    return Semantic().eval(), meta | {'semantic': True}
+  return Seg().eval(), meta | {'thing_score': THING_SCORE, 'stuff_score': STUFF_SCORE, 'assign': ASSIGN}
 
 
 def export_onnx(module, path: Path, output_names: list[str]):
@@ -241,14 +263,14 @@ def export_coreml(module, path: Path, output_names: list[str]):
   model.save(str(path))
 
 
-def export(out: Path, seg_model: str = SEG_MODEL, coreml: bool = False):
+def export(out: Path, seg_model: str = SEG_MODEL, coreml: bool = False, semantic: bool = False):
   out.mkdir(parents=True, exist_ok=True)
   meta = {
     'version': 1,
     'frame': {'w': FRAME_W, 'h': FRAME_H, 'f': MEDMODEL_FL, 'cx': FRAME_W / 2, 'cy': MEDMODEL_CY},
     'input': {'name': 'frame', 'shape': list(PACKED_SHAPE), 'type': 'float16'},
   }
-  seg, meta['seg'] = seg_module(seg_model)
+  seg, meta['seg'] = seg_module(seg_model, semantic)
   export_onnx(seg, out / 'diorama_seg.onnx', ['qmap', 'label', 'score'])
   meta['seg']['file'] = 'diorama_seg.onnx'
   if coreml:
