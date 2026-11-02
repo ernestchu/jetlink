@@ -57,16 +57,16 @@ public enum Diorama {
   }
 
   // 3x3 row-major
-  public static func m3mul(_ A: [Double], _ B: [Double]) -> [Double] {
-    var C = [Double](repeating: 0, count: 9)
-    for i in 0..<3 { for j in 0..<3 { C[3 * i + j] = A[3 * i] * B[j] + A[3 * i + 1] * B[3 + j] + A[3 * i + 2] * B[6 + j] } }
-    return C
+  public static func m3mul(_ m: [Double], _ n: [Double]) -> [Double] {
+    var out = [Double](repeating: 0, count: 9)
+    for i in 0..<3 { for j in 0..<3 { out[3 * i + j] = m[3 * i] * n[j] + m[3 * i + 1] * n[3 + j] + m[3 * i + 2] * n[6 + j] } }
+    return out
   }
-  public static func m3vec(_ A: [Double], _ v: [Double]) -> [Double] {
-    [A[0] * v[0] + A[1] * v[1] + A[2] * v[2], A[3] * v[0] + A[4] * v[1] + A[5] * v[2], A[6] * v[0] + A[7] * v[1] + A[8] * v[2]]
+  public static func m3vec(_ m: [Double], _ v: [Double]) -> [Double] {
+    [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]]
   }
-  static func m3inv(_ A: [Double]) -> [Double] {
-    let (a, b, c, d, e, f, g, h, i) = (A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8])
+  static func m3inv(_ m: [Double]) -> [Double] {
+    let (a, b, c, d, e, f, g, h, i) = (m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8])
     let co = [e * i - f * h, -(d * i - f * g), d * h - e * g]
     let det = a * co[0] + b * co[1] + c * co[2]
     return [co[0], -(b * i - c * h), b * f - c * e, co[1], a * i - c * g, -(a * f - c * d), co[2], -(a * h - b * g), a * e - b * d].map { $0 / det }
@@ -240,18 +240,18 @@ public struct DioramaOutputs: Sendable {
 /// Element-wise random walk Kalman filter: R from the model's std, Q = (k std)^2.
 struct KalmanFilter {
   let k: Double
-  var x: [Double]? = nil, P: [Double] = []
+  var x: [Double]? = nil, cov: [Double] = []
 
   mutating func update(_ z: [Double], _ std: [Double]) -> [Double] {
     guard var x, x.count == z.count else {
       x = z
-      P = std.map { pow(max($0, 1e-3), 2) }
+      cov = std.map { pow(max($0, 1e-3), 2) }
       return z
     }
     for i in 0..<z.count {
-      let r = pow(max(std[i], 1e-3), 2), Pp = P[i] + k * k * r, K = Pp / (Pp + r)
-      x[i] += K * (z[i] - x[i])
-      P[i] = (1 - K) * Pp
+      let r = pow(max(std[i], 1e-3), 2), prior = cov[i] + k * k * r, gain = prior / (prior + r)
+      x[i] += gain * (z[i] - x[i])
+      cov[i] = (1 - gain) * prior
     }
     self.x = x
     return x
@@ -279,24 +279,24 @@ struct OutputSmoother {
 /// The driving model's narrow frame is already calibrated: road point -> pixel is K view_from_device.
 public struct DioramaFrameCamera: Sendable {
   public let w: Double, h: Double, height: Double
-  let P: [Double], Pinv: [Double]
+  let proj: [Double], inverse: [Double]
 
   init(_ meta: DioramaMeta, frame f: DioramaMeta.Frame) {
     w = f.w
     h = f.h
     height = meta.height
-    P = Diorama.m3mul([f.f, 0, f.cx, 0, f.f, f.cy, 0, 0, 1], Diorama.viewFromDevice)
-    Pinv = Diorama.m3inv(P)
+    proj = Diorama.m3mul([f.f, 0, f.cx, 0, f.f, f.cy, 0, 0, 1], Diorama.viewFromDevice)
+    inverse = Diorama.m3inv(proj)
   }
 
   func project(_ x: Double, _ y: Double, _ z: Double) -> (u: Double, v: Double, w: Double) {
-    let w = P[6] * x + P[7] * y + P[8] * z
-    return ((P[0] * x + P[1] * y + P[2] * z) / w, (P[3] * x + P[4] * y + P[5] * z) / w, w)
+    let w = proj[6] * x + proj[7] * y + proj[8] * z
+    return ((proj[0] * x + proj[1] * y + proj[2] * z) / w, (proj[3] * x + proj[4] * y + proj[5] * z) / w, w)
   }
 
   /// The road point where pixel (u, v)'s ray meets the plane z = gz, or nil.
   func groundHit(_ u: Double, _ v: Double, _ gz: Double) -> (Double, Double, Double)? {
-    let d = Diorama.m3vec(Pinv, [u, v, 1])
+    let d = Diorama.m3vec(inverse, [u, v, 1])
     guard d[2] > 1e-6 else { return nil }
     let t = gz / d[2]
     return t > 0 ? (d[0] * t, d[1] * t, d[2] * t) : nil
@@ -407,7 +407,7 @@ public struct DioramaSeg: Sendable {
     }
     for (r, c0, c1) in bottom.values {
       if r >= h - 1 { return true }
-      if let G = cam.groundHit((Double(c0 + c1) / 2 + 0.5) * ds, Double(r + 1) * ds, road), abs(G.0 - x) <= max(3, 0.25 * x) { return true }
+      if let hit = cam.groundHit((Double(c0 + c1) / 2 + 0.5) * ds, Double(r + 1) * ds, road), abs(hit.0 - x) <= max(3, 0.25 * x) { return true }
     }
     return false
   }

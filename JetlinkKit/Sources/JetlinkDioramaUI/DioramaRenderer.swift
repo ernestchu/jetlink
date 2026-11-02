@@ -51,7 +51,10 @@
       self.device = device
       guard let queue = device.makeCommandQueue(), let library = try? device.makeLibrary(source: Self.shaders, options: nil) else { return nil }
       self.queue = queue
-      func pipeline(_ v: String, _ f: String, blend: Bool = false, mask: MTLColorWriteMask = .all, color: MTLPixelFormat = DioramaRenderer.colorFormat, samples: Int = DioramaRenderer.sampleCount, depth: Bool = true) -> MTLRenderPipelineState? {
+      func pipeline(
+        _ v: String, _ f: String, blend: Bool = false, mask: MTLColorWriteMask = .all, color: MTLPixelFormat = DioramaRenderer.colorFormat,
+        samples: Int = DioramaRenderer.sampleCount, depth: Bool = true
+      ) -> MTLRenderPipelineState? {
         let d = MTLRenderPipelineDescriptor()
         d.vertexFunction = library.makeFunction(name: v)
         d.fragmentFunction = library.makeFunction(name: f)
@@ -81,7 +84,9 @@
         d.isDepthWriteEnabled = write
         return device.makeDepthStencilState(descriptor: d)
       }
-      guard let depthWrite = depth(.less, write: true), let depthTestOnly = depth(.less, write: false), let depthOff = depth(.always, write: false) else { return nil }
+      guard let depthWrite = depth(.less, write: true), let depthTestOnly = depth(.less, write: false), let depthOff = depth(.always, write: false) else {
+        return nil
+      }
       (self.depthWrite, self.depthTestOnly, self.depthOff) = (depthWrite, depthTestOnly, depthOff)
 
       func sampler(mip: Bool) -> MTLSamplerState? {
@@ -138,9 +143,9 @@
     /// The road map's two layers, uploaded where they changed. Under the scene's lock.
     /// True when it uploaded, and the mipmaps need making.
     func syncMap(_ roadmap: DioramaRoadMap) -> Bool {
-      let N = DioramaRoadMap.n
+      let cells = DioramaRoadMap.n
       if map == nil {
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: N, height: N, mipmapped: true)
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: cells, height: cells, mipmapped: true)
         d.usage = .shaderRead
         #if os(macOS)
           d.storageMode = device.hasUnifiedMemory ? .shared : .managed
@@ -149,14 +154,14 @@
         #endif
         guard let a = device.makeTexture(descriptor: d), let b = device.makeTexture(descriptor: d) else { return false }
         map = [a, b]
-        roadmap.dirty = (0, N, 0, N)
+        roadmap.dirty = (0, cells, 0, cells)
       }
       guard let map, let d = roadmap.dirty, d.r1 > d.r0, d.c1 > d.c0 else { return false }
       for (texture, layer) in [(map[0], roadmap.a), (map[1], roadmap.b)] {
         layer.withUnsafeBytes { raw in
           texture.replace(
             region: MTLRegionMake2D(d.c0, d.r0, d.c1 - d.c0, d.r1 - d.r0), mipmapLevel: 0,
-            withBytes: raw.baseAddress! + (d.r0 * N + d.c0) * 4, bytesPerRow: N * 4)
+            withBytes: raw.baseAddress! + (d.r0 * cells + d.c0) * 4, bytesPerRow: cells * 4)
         }
       }
       roadmap.dirty = nil
@@ -166,47 +171,47 @@
     // MARK: the virtual camera
 
     /// The camera for a view between the chase camera (0) and the bird's-eye view (1).
-    static func camera(_ s: Double, _ hgt: Double, _ w: Double, _ h: Double) -> (f: Double, cx: Double, cy: Double, M: [Double], C: [Double]) {
-      let Cc = [Diorama.egoRear - 6.5, 0, hgt - 3.2], Mc = lookAt(Cc, [18, 0, hgt])
-      let Cb = [-14, 0, hgt - 30], Mb = lookAt(Cb, [10, 0, hgt])
-      let rel = logRot(Diorama.m3mul(Mb, transpose3(Mc)))
-      let M = Diorama.m3mul(rodrigues(rel.map { $0 * s }), Mc)
+    static func camera(_ s: Double, _ hgt: Double, _ w: Double, _ h: Double) -> (f: Double, cx: Double, cy: Double, rotation: [Double], center: [Double]) {
+      let chaseAt = [Diorama.egoRear - 6.5, 0, hgt - 3.2], chaseTurn = lookAt(chaseAt, [18, 0, hgt])
+      let birdAt = [-14, 0, hgt - 30], birdTurn = lookAt(birdAt, [10, 0, hgt])
+      let rel = logRot(Diorama.m3mul(birdTurn, transpose3(chaseTurn)))
+      let rotation = Diorama.m3mul(rodrigues(rel.map { $0 * s }), chaseTurn)
       // rise a bit faster than it moves back
-      let C = [Cc[0] + (Cb[0] - Cc[0]) * s, Cc[1] + (Cb[1] - Cc[1]) * s, Cc[2] + (Cb[2] - Cc[2]) * pow(s, 0.7)]
-      return ((0.62 * (1 - s) + 0.69 * s) * w, w / 2, (0.42 * (1 - s) + 0.5 * s) * h, M, C)
+      let center = [chaseAt[0] + (birdAt[0] - chaseAt[0]) * s, chaseAt[1] + (birdAt[1] - chaseAt[1]) * s, chaseAt[2] + (birdAt[2] - chaseAt[2]) * pow(s, 0.7)]
+      return ((0.62 * (1 - s) + 0.69 * s) * w, w / 2, (0.42 * (1 - s) + 0.5 * s) * h, rotation, center)
     }
 
     static func rodrigues(_ r: [Double]) -> [Double] {
       let th = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2])
       if th < 1e-9 { return [1, 0, 0, 0, 1, 0, 0, 0, 1] }
       let k = r.map { $0 / th }, s = sin(th), c = 1 - cos(th)
-      let K = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], KK = Diorama.m3mul(K, K)
-      return (0..<9).map { (($0 % 4 == 0) ? 1 : 0) + s * K[$0] + c * KK[$0] }
+      let skew = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], skew2 = Diorama.m3mul(skew, skew)
+      return (0..<9).map { (($0 % 4 == 0) ? 1 : 0) + s * skew[$0] + c * skew2[$0] }
     }
 
-    static func logRot(_ R: [Double]) -> [Double] {
-      let th = acos(Diorama.clamp((R[0] + R[4] + R[8] - 1) / 2, -1, 1))
+    static func logRot(_ rot: [Double]) -> [Double] {
+      let th = acos(Diorama.clamp((rot[0] + rot[4] + rot[8] - 1) / 2, -1, 1))
       if th < 1e-9 { return [0, 0, 0] }
       let f = th / (2 * sin(th))
-      return [f * (R[7] - R[5]), f * (R[2] - R[6]), f * (R[3] - R[1])]
+      return [f * (rot[7] - rot[5]), f * (rot[2] - rot[6]), f * (rot[3] - rot[1])]
     }
 
     /// device_from_road: rows forward, right, down.
-    static func lookAt(_ C: [Double], _ target: [Double]) -> [Double] {
-      let f = [target[0] - C[0], target[1] - C[1], target[2] - C[2]], fn = sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2])
-      let F = f.map { $0 / fn }
-      var y = [-F[1], F[0], 0.0]  // [0, 0, 1] x F
+    static func lookAt(_ eye: [Double], _ target: [Double]) -> [Double] {
+      let f = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]], fn = sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2])
+      let forward = f.map { $0 / fn }
+      var y = [-forward[1], forward[0], 0.0]  // [0, 0, 1] x F
       let yn = sqrt(y[0] * y[0] + y[1] * y[1])
       y = y.map { $0 / yn }
-      let z = [F[1] * y[2] - F[2] * y[1], F[2] * y[0] - F[0] * y[2], F[0] * y[1] - F[1] * y[0]]
-      return F + y + z
+      let z = [forward[1] * y[2] - forward[2] * y[1], forward[2] * y[0] - forward[0] * y[2], forward[0] * y[1] - forward[1] * y[0]]
+      return forward + y + z
     }
 
-    static func transpose3(_ A: [Double]) -> [Double] { [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]] }
+    static func transpose3(_ m: [Double]) -> [Double] { [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]] }
 
     /// A row-major 4x4, as simd's column-major float4x4.
-    static func matrix(_ A: [Double]) -> float4x4 {
-      float4x4(rows: (0..<4).map { i in SIMD4<Float>((0..<4).map { Float(A[4 * i + $0]) }) })
+    static func matrix(_ m: [Double]) -> float4x4 {
+      float4x4(rows: (0..<4).map { i in SIMD4<Float>((0..<4).map { Float(m[4 * i + $0]) }) })
     }
 
     // MARK: scene geometry, as diorama-render.js builds it
@@ -241,7 +246,9 @@
       for i in [0, 1, 2, 0, 2, 3] { out.append(contentsOf: v[i]) }
     }
 
-    static func blobShadow(_ out: inout Decals, _ x: Double, _ y: Double, _ heading: Double, _ L: Double, _ W: Double, _ z: Double, alpha: Float = 0.38) {
+    static func blobShadow(
+      _ out: inout Decals, _ x: Double, _ y: Double, _ heading: Double, _ length: Double, _ width: Double, _ z: Double, alpha: Float = 0.38
+    ) {
       let c = cos(heading), s = sin(heading)
       func rect(_ l: Double, _ w: Double, _ a: Float) -> [[Float]] {
         let corners: [(Double, Double)] = [(l, w), (l, -w), (-l, -w), (-l, w)]
@@ -250,7 +257,7 @@
           return [Float(cx), Float(cy), Float(z - 0.015), 0, 0, 0, a]
         }
       }
-      let inner = rect(L * 0.85, W * 0.75, alpha), outer = rect(L + 0.6, W + 0.6, 0)
+      let inner = rect(length * 0.85, width * 0.75, alpha), outer = rect(length + 0.6, width + 0.6, 0)
       for v in [inner[0], inner[1], inner[2], inner[0], inner[2], inner[3]] { out.append(contentsOf: v) }
       for i in 0..<4 {
         let j = (i + 1) % 4
@@ -334,12 +341,12 @@
         0, 0, far / (far - near), -far * near / (far - near),
         0, 0, 1, 0,
       ]
-      let R = Diorama.m3mul(Diorama.viewFromDevice, camv.M), C = camv.C
-      let t = Diorama.m3vec(R, C)
-      let view = [R[0], R[1], R[2], -t[0], R[3], R[4], R[5], -t[1], R[6], R[7], R[8], -t[2], 0, 0, 0, 1]
+      let rot = Diorama.m3mul(Diorama.viewFromDevice, camv.rotation), eye = camv.center
+      let t = Diorama.m3vec(rot, eye)
+      let view = [rot[0], rot[1], rot[2], -t[0], rot[3], rot[4], rot[5], -t[1], rot[6], rot[7], rot[8], -t[2], 0, 0, 0, 1]
       let vp = Self.matrix(proj) * Self.matrix(view)
       var uniforms = FrameUniforms(
-        vp: vp, cam: SIMD4(Float(C[0]), Float(C[1]), Float(C[2]), 0), horizon: SIMD4(th.horizon, 1), fog: [45, 190, 0, 0])
+        vp: vp, cam: SIMD4(Float(eye[0]), Float(eye[1]), Float(eye[2]), 0), horizon: SIMD4(th.horizon, 1), fog: [45, 190, 0, 0])
 
       pass.colorAttachments[0].clearColor = MTLClearColor(red: Double(th.horizon.x), green: Double(th.horizon.y), blue: Double(th.horizon.z), alpha: 1)
       pass.colorAttachments[0].loadAction = .clear
@@ -425,20 +432,23 @@
       enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: data.count / stride)
     }
 
-    struct Object { let x, y, heading, L, W: Double, braking: Bool }
+    struct Object { let x, y, heading, length, width: Double, braking: Bool }
 
     /// Only the lead, from this frame's prediction, as the one car: its rear at the model's distance, facing along its lane.
     private func objects(_ state: DioramaScene.State) -> [Object] {
       guard let l = state.lead, let car else { return [] }
-      let L = car.dims[0], W = car.dims[1]
-      return [Object(x: l.x + 0.5 * L * cos(l.heading), y: l.y + 0.5 * L * sin(l.heading), heading: l.heading, L: L, W: W, braking: l.braking)]
+      let length = car.dims[0], width = car.dims[1]
+      return [
+        Object(
+          x: l.x + 0.5 * length * cos(l.heading), y: l.y + 0.5 * length * sin(l.heading), heading: l.heading, length: length, width: width, braking: l.braking)
+      ]
     }
 
     private func drawDecals(_ enc: MTLRenderCommandEncoder, _ state: DioramaScene.State, _ objs: [Object], _ hgt: Double, _ uniforms: inout FrameUniforms) {
       let th = theme, out = state.out
       var tris: Decals = []
       tris.reserveCapacity(40_000)
-      for o in objs { Self.blobShadow(&tris, o.x, o.y, o.heading, o.L, o.W, hgt) }
+      for o in objs { Self.blobShadow(&tris, o.x, o.y, o.heading, o.length, o.width, hgt) }
       Self.blobShadow(&tris, (Diorama.egoFront + Diorama.egoRear) / 2, 0, 0, Diorama.egoFront - Diorama.egoRear, 1.85, hgt)
       // road edges: a soft red glow
       if out.roadEdges.count >= 2 * Diorama.idxN * 2 {
@@ -525,7 +535,8 @@
         enc.setFragmentBytes(&m, length: MemoryLayout<MeshUniforms>.stride, index: 1)
         for part in car.parts where part.count > 0 {
           enc.setVertexBufferOffset(part.vertexOffset * 16, index: 0)
-          enc.drawIndexedPrimitives(type: .triangle, indexCount: part.count, indexType: .uint16, indexBuffer: car.indices, indexBufferOffset: part.indexOffset * 2)
+          enc.drawIndexedPrimitives(
+            type: .triangle, indexCount: part.count, indexType: .uint16, indexBuffer: car.indices, indexBufferOffset: part.indexOffset * 2)
         }
       }
       for o in objs { draw(o.x, o.y, o.heading, paint: Self.leadPaint, tint: th.path, tintAmt: 0.55, spec: 0.06, brake: o.braking ? 1 : 0) }

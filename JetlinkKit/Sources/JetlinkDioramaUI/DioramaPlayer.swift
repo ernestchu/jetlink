@@ -148,13 +148,13 @@
 
     /// The four Y planes are Y[0::2, 0::2], Y[1::2, 0::2], Y[0::2, 1::2], Y[1::2, 1::2]; BT.601, video range.
     static func unpack(_ w: Int, _ h: Int, _ packed: [UInt8]) -> [UInt8] {
-      let W = 2 * w, H = 2 * h, plane = w * h
-      var px = [UInt8](repeating: 255, count: W * H * 4)
+      let width = 2 * w, height = 2 * h, plane = w * h
+      var px = [UInt8](repeating: 255, count: width * height * 4)
       func byte(_ x: Double) -> UInt8 { UInt8(min(max(x.rounded(), 0), 255)) }
-      for y in 0..<H {
-        for x in 0..<W {
+      for y in 0..<height {
+        for x in 0..<width {
           let at = (y >> 1) * w + (x >> 1), c = (Double(packed[((y & 1) + 2 * (x & 1)) * plane + at]) - 16) * 1.164
-          let u = Double(packed[4 * plane + at]) - 128, v = Double(packed[5 * plane + at]) - 128, o = 4 * (y * W + x)
+          let u = Double(packed[4 * plane + at]) - 128, v = Double(packed[5 * plane + at]) - 128, o = 4 * (y * width + x)
           px[o] = byte(c + 1.596 * v)
           px[o + 1] = byte(c - 0.391 * u - 0.813 * v)
           px[o + 2] = byte(c + 2.018 * u)
@@ -165,9 +165,9 @@
 
     mutating func picture(_ image: (frame: Int, w: Int, h: Int, rgba: [UInt8]), _ seg: DioramaSegMessage?, _ meta: DioramaMeta) -> InputPicture? {
       shown = image.frame
-      let W = image.w, H = image.h
-      guard let context = Self.context(W, H), let base = Self.image(image.rgba, W, H) else { return nil }
-      context.draw(base, in: CGRect(x: 0, y: 0, width: W, height: H))
+      let width = image.w, height = image.h
+      guard let context = Self.context(width, height), let base = Self.image(image.rgba, width, height) else { return nil }
+      context.draw(base, in: CGRect(x: 0, y: 0, width: width, height: height))
       var notes = ["frame \(image.frame)"], labels: [InputPicture.Label] = []
       if let seg, let segInfo = meta.seg {
         let info = DioramaSeg(seg, segInfo), w = info.w, h = info.h, qmap = info.qmap
@@ -179,7 +179,9 @@
           guard let c = thing.map({ Self.thingTint[$0] ?? Self.thingTint["car"]! }) ?? Self.segTint[info.cls[i]] else { continue }
           // a thing's edge (another query beside it) opaque, its inside and the road classes see-through
           let x = i % w
-          let edge = thing != nil && ((x > 0 && qmap[i - 1] != q) || (x < w - 1 && qmap[i + 1] != q) || (i >= w && qmap[i - w] != q) || (i < w * (h - 1) && qmap[i + w] != q))
+          let edge =
+            thing != nil
+            && ((x > 0 && qmap[i - 1] != q) || (x < w - 1 && qmap[i + 1] != q) || (i >= w && qmap[i - w] != q) || (i < w * (h - 1) && qmap[i + w] != q))
           let a: UInt8 = edge ? 255 : thing != nil ? 110 : 90
           // premultiplied, as the context draws it
           let o = 4 * i
@@ -190,7 +192,7 @@
         }
         if let overlay = Self.image(tint, w, h) {
           context.interpolationQuality = .none
-          context.draw(overlay, in: CGRect(x: 0, y: 0, width: W, height: H))
+          context.draw(overlay, in: CGRect(x: 0, y: 0, width: width, height: height))
         }
         // each thing's name and score, above it
         var tops: [UInt8: Int] = [:], area = [Int](repeating: 0, count: 256)
@@ -200,16 +202,19 @@
           area[Int(q)] += 1
           if tops[q] == nil { tops[q] = i }
         }
-        let sx = Double(W) / Double(w), sy = Double(H) / Double(h)
+        let sx = Double(width) / Double(w), sy = Double(height) / Double(h)
         for (q, i) in tops.sorted(by: { $0.value < $1.value }) where area[Int(q)] >= 6 {
           let thing = info.qThing[Int(q)]!
           let score = Double(seg.score[Int(q)]) / 255
-          labels.append(.init(text: "\(thing) \(String(format: "%.2f", score))", x: Double(i % w) * sx, y: Double(i / w) * sy, rgb: Self.thingTint[thing] ?? Self.thingTint["car"]!))
+          labels.append(
+            .init(
+              text: "\(thing) \(String(format: "%.2f", score))", x: Double(i % w) * sx, y: Double(i / w) * sy,
+              rgb: Self.thingTint[thing] ?? Self.thingTint["car"]!))
         }
         notes.append("seg \(Int(seg.ms.rounded())) ms")
       }
       guard let composed = context.makeImage() else { return nil }
-      return InputPicture(image: composed, labels: labels, caption: "model input · \(W)×\(H) · \(notes.joined(separator: " · "))")
+      return InputPicture(image: composed, labels: labels, caption: "model input · \(width)×\(height) · \(notes.joined(separator: " · "))")
     }
 
     static func context(_ w: Int, _ h: Int) -> CGContext? {

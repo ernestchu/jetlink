@@ -1,8 +1,8 @@
 import Foundation
 import JetlinkDioramaUI
 import JetlinkKit
-import UIKit
 import Observation
+import UIKit
 
 /// The composition root. One of these exists for the life of the app.
 @MainActor

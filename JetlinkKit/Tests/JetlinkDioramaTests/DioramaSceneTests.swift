@@ -40,7 +40,7 @@ enum SyntheticDrive {
     // plan, 33 x 15 and its log stds
     var plan = [Double](repeating: 0, count: 495)
     for i in 0..<33 {
-      let T = 10 * pow(Double(i) / 32, 2), x = v * T
+      let ahead = 10 * pow(Double(i) / 32, 2), x = v * ahead
       plan[i * 15] = x + noise(k, i)
       plan[i * 15 + 1] = c * x * x
       plan[i * 15 + 2] = 0.01 * x
@@ -124,9 +124,9 @@ enum SyntheticDrive {
   /// Where each query-map pixel's ray meets the road, ahead of the car, if it does.
   static let ground: [(Double, Double)?] = {
     let w = 256, h = 128, ds = 2.0
-    let Pinv = Diorama.m3inv(Diorama.m3mul([910, 0, 256, 0, 910, 47.6, 0, 0, 1], Diorama.viewFromDevice))
+    let inverse = Diorama.m3inv(Diorama.m3mul([910, 0, 256, 0, 910, 47.6, 0, 0, 1], Diorama.viewFromDevice))
     return (0..<w * h).map { i in
-      let d = Diorama.m3vec(Pinv, [(Double(i % w) + 0.5) * ds, (Double(i / w) + 0.5) * ds, 1])
+      let d = Diorama.m3vec(inverse, [(Double(i % w) + 0.5) * ds, (Double(i / w) + 0.5) * ds, 1])
       guard d[2] > 1e-6 else { return nil }
       let s = 1.22 / d[2]
       return (d[0] * s, d[1] * s)
