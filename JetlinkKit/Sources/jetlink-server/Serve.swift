@@ -186,10 +186,18 @@
       #if os(Linux)
         if let trt = backend as? TrtBackend {
           factory = { onnx, name, report in
-            try FileManager.default.createDirectory(at: engines, withIntermediateDirectories: true)
-            let plan = engines.appending(path: "\(name).\(trt.tag())\(trt.suffix)")
-            if !FileManager.default.fileExists(atPath: plan.path) {
-              try trt.build(model: onnx, artifact: plan, report: report, metaExtra: ["diorama": name])
+            let fm = FileManager.default
+            try fm.createDirectory(at: engines, withIntermediateDirectories: true)
+            // by the graph's contents, so a new model (a new download, another export) is built, not an old plan loaded
+            let (sha256, _) = try Registry.hashFile(onnx)
+            let plan = engines.appending(path: "\(name)-\(sha256.prefix(16)).\(trt.tag())\(trt.suffix)")
+            if !fm.fileExists(atPath: plan.path) {
+              try trt.build(model: onnx, artifact: plan, report: report, metaExtra: ["diorama": name, "onnx_sha256": sha256])
+              // an older graph's plans under this name, a gigabyte each, go
+              for old in (try? fm.contentsOfDirectory(atPath: engines.path)) ?? []
+              where (old.hasPrefix("\(name)-") || old.hasPrefix("\(name).")) && !old.hasPrefix(plan.deletingPathExtension().lastPathComponent) {
+                try? fm.removeItem(at: engines.appending(path: old))
+              }
             }
             return try trt.load(artifact: plan, report: report)
           }
