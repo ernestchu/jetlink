@@ -7,8 +7,9 @@
 // The driving model's outputs give the path, lanes, road edges, lead and ego
 // motion; the segmentation gives the road surface, which a road map holds
 // around the car. The lead is drawn from each frame's own prediction, facing
-// along its lane, when the newest segmentation has a vehicle where it is: no
-// tracking between frames.
+// along its lane, when the newest segmentation has a vehicle where it is; with
+// no such lead, a vehicle the segmentation has in the car's path within 15 m
+// is one. No tracking between frames.
 //
 // Road frame throughout: x forward, y right, z down, origin at the camera, the
 // road at z = height. No browser APIs here: diorama-render.js draws the scene,
@@ -24,6 +25,7 @@
   const EGO_FRONT = 1.6, EGO_REAR = -3.1;  // the ego car's bumpers, from the camera
   const OCCLUDER = 255;
   const SEG_FRESH = 10;  // frames: a segmentation older than this (0.5 s) confirms no lead
+  const SEG_LEAD_MAX = 15, SEG_LEAD_HALF = 1.0, SEG_LEAD_WIDTH = 0.5;  // a lead the segmentation alone shows: m
 
   // ---------------------------------------------------------------- small math
   const clamp = (x, a, b) => Math.min(Math.max(x, a), b);
@@ -289,6 +291,30 @@
       if (G && Math.abs(G[0] - x) <= Math.max(3, 0.25 * x)) return true;
     }
     return false;
+  }
+
+  // The nearest vehicle the segmentation has in the ego car's path, where the model has no lead: the lowest row of
+  // vehicle pixels (not a person) on the road within SEG_LEAD_HALF of the path (pathY, by distance), at
+  // least SEG_LEAD_WIDTH wide there, between the ego car's front and SEG_LEAD_MAX ahead. Where it meets the road is
+  // its distance; one cut off by the frame's bottom is at most the frame's nearest road. The rows run up from the
+  // bottom, so a vehicle behind it, higher up, changes nothing. Its distance, or null.
+  function segLeadAhead(cam, seg, pathY, road) {
+    const { w, h, ds, qmap, qThing } = seg;
+    for (let r = h - 1; r >= 0; r--) {
+      let near = false, width = 0, sum = 0, n = 0;
+      for (let c = 0; c < w; c++) {
+        const G = cam.groundHit((c + 0.5) * ds, (r + 1) * ds, road);
+        if (!G || G[0] > SEG_LEAD_MAX) continue;
+        near = true;
+        if (G[0] < EGO_FRONT || Math.abs(G[1] - pathY(G[0])) > SEG_LEAD_HALF) continue;
+        const q = qmap[r * w + c];
+        if (q === 255 || !qThing[q] || qThing[q] === 'person') continue;
+        width += ds * G[0] / cam.f; sum += G[0]; n++;
+      }
+      if (width >= SEG_LEAD_WIDTH) return sum / n;
+      if (!near) return null;  // above the rows that reach the road within SEG_LEAD_MAX
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------- road map
@@ -742,15 +768,21 @@
       // this frame's lead, as this frame predicts it: the distance to its rear and its offset, facing along the
       // ego lane there (its lines reach 192 m; the plan, laid out in time, can end short of a slow car's lead and
       // turn back at its end), braking when its predicted acceleration says so. Only where the newest segmentation,
-      // at most SEG_FRESH frames old, has a vehicle; none without one.
+      // at most SEG_FRESH frames old, has a vehicle. Without one, the vehicle that segmentation has in the planned
+      // path within SEG_LEAD_MAX, if any (segLeadAhead): on the path, facing along the lane, never braking, marked seg.
       let lead = null;
       const fresh = this.lastSeg && k - this.lastSeg.frame <= SEG_FRESH ? this.lastSeg.seg : null;
-      if (raw.lead_prob[0] > 0.5 && fresh) {
+      const freshCam = fresh && (fresh.wide ? this.wideCam : this.cam);
+      if (raw.lead_prob[0] > 0.5 && freshCam) {
         const x = leadAt(raw.lead, 0, 0, 0), y = leadAt(raw.lead, 0, 0, 1);
-        const freshCam = fresh.wide ? this.wideCam : this.cam;
-        if (freshCam && segSeesVehicle(freshCam, fresh, x, y, this.cam.height + zpath(x))) {
-          lead = { x, y, heading: laneHeading(x), braking: leadAt(raw.lead, 0, 0, 3) < -0.8 };
+        if (segSeesVehicle(freshCam, fresh, x, y, this.cam.height + zpath(x))) {
+          lead = { x, y, heading: laneHeading(x), braking: leadAt(raw.lead, 0, 0, 3) < -0.8, seg: false };
         }
+      }
+      if (!lead && freshCam) {
+        const pathY = moving ? (x) => interp(x, px, py) : () => 0;
+        const x = segLeadAhead(freshCam, fresh, pathY, this.cam.height);
+        if (x !== null) lead = { x, y: pathY(x), heading: laneHeading(x), braking: false, seg: true };
       }
 
       // road view or bird's-eye (ViewChooser), panning between the two
@@ -772,10 +804,10 @@
   function keepLast(arr, v, n) { arr.push(v); if (arr.length > n) arr.shift(); }
 
   const api = {
-    FPS, DT, MPH, IDX_N, X_IDXS, EGO_FRONT, EGO_REAR,
+    FPS, DT, MPH, IDX_N, X_IDXS, EGO_FRONT, EGO_REAR, SEG_LEAD_MAX,
     clamp, smoothstep, interp, percentile, m3mul, m3inv, m3vec, VIEW_FROM_DEVICE,
     decode, readFile, parseDrive, plan, lane, leadAt, FrameCamera, RoadMap, Engine, ViewChooser, VIEW,
-    readSeg, segSeesVehicle, morph, runs, components,
+    readSeg, segSeesVehicle, segLeadAhead, morph, runs, components,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.DioramaEngine = api;

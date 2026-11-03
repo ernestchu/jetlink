@@ -52,6 +52,13 @@ The page does the rest, in the browser, and the apps do the same natively:
     lead's spot in the frame, standing on the road within 25% (or 3 m) of the
     model's distance.
 
+  Without such a lead, a vehicle the segmentation alone shows close ahead is
+  drawn instead, in plain grey rather than the path's blue, and never
+  braking: the nearest vehicle standing on the road within 1 m of the planned
+  path, at least 0.5 m of it in view there, and at most 15 m ahead. It stands
+  on the path where the vehicle meets the road, facing along the lane. This
+  catches a close car the model misses, such as one crossing just ahead.
+
   Without a segmentation (while it is prepared, or paused after a slow
   driving frame) no lead is drawn. Nothing is tracked or smoothed between
   frames, and no other cars are drawn.

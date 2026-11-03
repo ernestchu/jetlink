@@ -31,7 +31,8 @@ enum SyntheticDrive {
 
   static func speed(_ t: Double) -> Double { 12 + 7 * sin(t / 3) }
   static func curve(_ t: Double) -> Double { 0.0015 * sin(t / 5) }
-  static func leadX(_ t: Double) -> Double { 20 + 3 * sin(t / 2) }
+  /// Within 15 m around t = 9, where the model says it has no lead: the segmentation alone shows it then.
+  static func leadX(_ t: Double) -> Double { 20 + 8 * sin(t / 2) }
   /// A little deterministic noise, for the smoother to smooth.
   static func noise(_ k: Int, _ i: Int) -> Double { 0.05 * sin(Double(k * 31 + i * 17)) }
 
@@ -168,7 +169,7 @@ struct SceneSummary: Equatable, CustomStringConvertible {
   init(_ scene: DioramaScene) {
     let s = scene.state!
     var values = [s.px[32], s.py[20], s.out.laneLines[40], s.out.roadEdgesStds[0], s.view, s.speed, s.accel]
-    values += [s.lead?.x ?? .nan, s.lead?.heading ?? .nan, s.lead.map { $0.braking ? 1 : 0 } ?? .nan]
+    values += [s.lead?.x ?? .nan, s.lead?.heading ?? .nan, s.lead.map { $0.braking ? 1 : 0 } ?? .nan, s.lead.map { $0.seg ? 1 : 0 } ?? .nan]
     values += [Double(s.stripes.count), s.stripes.first?[0].x ?? .nan, s.stripes.last?[2].y ?? .nan, s.pose.x, s.pose.y, s.pose.z]
     var map = 0
     if s.frame % 50 == 0, let m = scene.roadmap {
@@ -247,18 +248,28 @@ struct DioramaSceneTests {
   @Test("The scene follows the drive: the road view at speed, bird's-eye when slow or at a crosswalk, a lead and a crosswalk")
   func steps() {
     let scene = DioramaScene()
-    var views: [Double] = [], leads = 0, stripes = 0
+    var views: [Double] = [], leads = 0, segLeads = 0, stripes = 0
     for m in SyntheticDrive.messages(frames: 400) {
       scene.push(DioramaMessage(m))
       if case .drive = DioramaMessage(m), let s = scene.state {
         views.append(s.view)
-        if s.lead != nil { leads += 1 }
+        if let l = s.lead {
+          leads += 1
+          let t = Double(s.frame) / 20
+          if l.seg {
+            // the model has no lead then; the car stands within 15 m, a frame or two ago
+            segLeads += 1
+            #expect(t > 8 && t < 9.6 && l.x <= Diorama.segLeadMax && !l.braking)
+            #expect(abs(l.x - SyntheticDrive.leadX(t)) < 1.5, "frame \(s.frame): at \(l.x)")
+          }
+        }
         if !s.stripes.isEmpty { stripes += 1 }
       }
     }
     #expect(views.count == 400)
     #expect(views.contains(0) && views.contains(1))
     #expect(leads > 100)
+    #expect(segLeads > 10)
     #expect(stripes > 10)
     #expect(scene.roadmap?.a.contains { $0 > 200 } == true)
   }
@@ -304,7 +315,7 @@ struct DioramaSceneTests {
             if (s.frame % 50 === 0) for (let i = 0; i < map.a.length; i++) sum += map.a[i] * ((i % 7) + 1) + map.b[i];
             const st = s.stripes, nan = NaN;
             return [s.frame, sum, s.px[32], s.py[20], s.out.lane_lines[40], s.out.road_edges_stds[0], s.view, s.hud.v, s.hud.a,
-              l ? l.x : nan, l ? l.heading : nan, l ? (l.braking ? 1 : 0) : nan,
+              l ? l.x : nan, l ? l.heading : nan, l ? (l.braking ? 1 : 0) : nan, l ? (l.seg ? 1 : 0) : nan,
               st.length, st.length ? st[0][0][0] : nan, st.length ? st[st.length - 1][2][1] : nan, s.pose[0], s.pose[1], s.pose[2]];
           }
           """)

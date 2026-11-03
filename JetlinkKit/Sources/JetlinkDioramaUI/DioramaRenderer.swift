@@ -432,7 +432,7 @@
       enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: data.count / stride)
     }
 
-    struct Object { let x, y, heading, length, width: Double, braking: Bool }
+    struct Object { let x, y, heading, length, width: Double, braking, seg: Bool }
 
     /// Only the lead, from this frame's prediction, as the one car: its rear at the model's distance, facing along its lane.
     private func objects(_ state: DioramaScene.State) -> [Object] {
@@ -440,7 +440,8 @@
       let length = car.dims[0], width = car.dims[1]
       return [
         Object(
-          x: l.x + 0.5 * length * cos(l.heading), y: l.y + 0.5 * length * sin(l.heading), heading: l.heading, length: length, width: width, braking: l.braking)
+          x: l.x + 0.5 * length * cos(l.heading), y: l.y + 0.5 * length * sin(l.heading), heading: l.heading, length: length, width: width, braking: l.braking,
+          seg: l.seg)
       ]
     }
 
@@ -539,7 +540,8 @@
             type: .triangle, indexCount: part.count, indexType: .uint16, indexBuffer: car.indices, indexBufferOffset: part.indexOffset * 2)
         }
       }
-      for o in objs { draw(o.x, o.y, o.heading, paint: Self.leadPaint, tint: th.path, tintAmt: 0.55, spec: 0.06, brake: o.braking ? 1 : 0) }
+      // the model's lead under the path's tint; one the segmentation alone shows, plain
+      for o in objs { draw(o.x, o.y, o.heading, paint: Self.leadPaint, tint: th.path, tintAmt: o.seg ? 0 : 0.55, spec: 0.06, brake: o.braking ? 1 : 0) }
       draw((Diorama.egoFront + Diorama.egoRear) / 2, 0, 0, paint: Self.egoPaint, tint: nil, tintAmt: 0, spec: 0.35, brake: 0)
     }
 

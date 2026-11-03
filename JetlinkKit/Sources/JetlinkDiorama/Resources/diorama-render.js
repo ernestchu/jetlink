@@ -410,7 +410,7 @@ void main() {
       const l = state.lead, a = this.assets.car;
       if (!l || !a) return [];
       const [L, W] = a.dims;
-      return [{ type: 'car', x: l.x + 0.5 * L * Math.cos(l.heading), y: l.y + 0.5 * L * Math.sin(l.heading), heading: l.heading, L, W, braking: l.braking }];
+      return [{ type: 'car', x: l.x + 0.5 * L * Math.cos(l.heading), y: l.y + 0.5 * L * Math.sin(l.heading), heading: l.heading, L, W, braking: l.braking, seg: !!l.seg }];
     }
 
     drawDecals(state, objs, hgt, common) {
@@ -504,7 +504,8 @@ void main() {
           gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
         }
       };
-      for (const o of objs) draw(o.type, o.x, o.y, o.heading, LEAD_PAINT, th.path, 0.55, 0.06, o.braking ? 1 : 0);
+      // the model's lead under the path's tint; one the segmentation alone shows, plain
+      for (const o of objs) draw(o.type, o.x, o.y, o.heading, LEAD_PAINT, th.path, o.seg ? 0 : 0.55, 0.06, o.braking ? 1 : 0);
       draw('car', (EGO_FRONT + EGO_REAR) / 2, 0, 0, EGO_PAINT, null, 0, 0.35, 0);
       gl.bindVertexArray(null);
     }

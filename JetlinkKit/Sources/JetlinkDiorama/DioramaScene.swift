@@ -21,6 +21,9 @@ public enum Diorama {
   static let occluder: UInt8 = 255
   /// Frames: a segmentation older than this (0.5 s) confirms no lead.
   static let segFresh = 10
+  /// A lead the segmentation alone shows (DioramaSeg.leadAhead): at most this far, metres
+  public static let segLeadMax = 15.0
+  static let segLeadHalf = 1.0, segLeadWidth = 0.5
 
   // MARK: small math
 
@@ -432,6 +435,30 @@ public struct DioramaSeg: Sendable {
     }
     return false
   }
+
+  /// The nearest vehicle the segmentation has in the ego car's path, where the model has no lead: the lowest row of
+  /// vehicle pixels (not a person) on the road within segLeadHalf of the path (pathY, by distance), at
+  /// least segLeadWidth wide there, between the ego car's front and segLeadMax ahead. Where it meets the road is
+  /// its distance; one cut off by the frame's bottom is at most the frame's nearest road. The rows run up from the
+  /// bottom, so a vehicle behind it, higher up, changes nothing. Its distance, or nil.
+  func leadAhead(_ cam: DioramaFrameCamera, _ pathY: (Double) -> Double, _ road: Double) -> Double? {
+    for r in stride(from: h - 1, through: 0, by: -1) {
+      var near = false, width = 0.0, sum = 0.0, n = 0
+      for c in 0..<w {
+        guard let g = cam.groundHit((Double(c) + 0.5) * ds, Double(r + 1) * ds, road), g.0 <= Diorama.segLeadMax else { continue }
+        near = true
+        if g.0 < Diorama.egoFront || abs(g.1 - pathY(g.0)) > Diorama.segLeadHalf { continue }
+        let q = qmap[r * w + c]
+        guard q != 255, let thing = qThing[Int(q)], thing != "person" else { continue }
+        width += ds * g.0 / cam.f
+        sum += g.0
+        n += 1
+      }
+      if width >= Diorama.segLeadWidth { return sum / Double(n) }
+      if !near { return nil }  // above the rows that reach the road within segLeadMax
+    }
+    return nil
+  }
 }
 
 // MARK: - the scene, frame by frame
@@ -439,9 +466,10 @@ public struct DioramaSeg: Sendable {
 /// The scene from the messages, as diorama-engine.js's Engine makes it. Not
 /// thread safe: one thread pushes, and the renderer reads under the same lock.
 public final class DioramaScene {
-  /// The lead, as this frame predicts it: the distance to its rear and its offset, facing along its lane.
+  /// The lead, as this frame predicts it: the distance to its rear and its offset, facing along its lane. `seg`:
+  /// the segmentation alone shows it, the model having none there.
   public struct Lead: Sendable {
-    public let x: Double, y: Double, heading: Double, braking: Bool
+    public let x: Double, y: Double, heading: Double, braking: Bool, seg: Bool
   }
 
   /// One frame's scene.
@@ -574,12 +602,20 @@ public final class DioramaScene {
     // this frame's lead, as this frame predicts it: the distance to its rear and its offset, facing along the
     // ego lane there (its lines reach 192 m; the plan, laid out in time, can end short of a slow car's lead and
     // turn back at its end), braking when its predicted acceleration says so. Only where the newest segmentation,
-    // at most segFresh frames old, has a vehicle; none without one.
+    // at most segFresh frames old, has a vehicle. Without one, the vehicle that segmentation has in the planned
+    // path within segLeadMax, if any (DioramaSeg.leadAhead): on the path, facing along the lane, never braking, marked seg.
     var lead: Lead? = nil
-    if let p = raw.leadProb.first, p > 0.5, !raw.lead.isEmpty, let last = lastSeg, k - last.frame <= Diorama.segFresh {
-      let x = raw.lead(0, 0, 0), y = raw.lead(0, 0, 1)
-      if let segCam = last.seg.wide ? wideCam : cam, last.seg.seesVehicle(segCam, x, y, cam.height + zpath(x)) {
-        lead = Lead(x: x, y: y, heading: laneHeading(x), braking: raw.lead(0, 0, 3) < -0.8)
+    let fresh = lastSeg.flatMap { k - $0.frame <= Diorama.segFresh ? $0.seg : nil }
+    if let fresh, let segCam = fresh.wide ? wideCam : cam {
+      if let p = raw.leadProb.first, p > 0.5, !raw.lead.isEmpty {
+        let x = raw.lead(0, 0, 0), y = raw.lead(0, 0, 1)
+        if fresh.seesVehicle(segCam, x, y, cam.height + zpath(x)) {
+          lead = Lead(x: x, y: y, heading: laneHeading(x), braking: raw.lead(0, 0, 3) < -0.8, seg: false)
+        }
+      }
+      let pathY: (Double) -> Double = moving ? { Diorama.interp($0, px, py) } : { _ in 0 }
+      if lead == nil, let x = fresh.leadAhead(segCam, pathY, cam.height) {
+        lead = Lead(x: x, y: pathY(x), heading: laneHeading(x), braking: false, seg: true)
       }
     }
 

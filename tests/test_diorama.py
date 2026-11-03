@@ -92,10 +92,10 @@ def test_the_warp():
   assert np.allclose(p[:2] / p[2], [964, 604])
 
 
-def synthetic_drive(path: Path, frames: int = 40, car_at: float | None = 20.0, wide: bool = False) -> None:
-  """A straight road at 10 m/s, seen every other frame, with a car on it `car_at` metres ahead (None: no
-  segmentation at all); the model's lead 0.1 m further each frame, 20 m to 23.9 m. `wide`: the segmentations
-  are the wide frame's."""
+def synthetic_drive(path: Path, frames: int = 40, car_at: float | None = 20.0, wide: bool = False, lead_prob: float = 5.0) -> None:
+  """A straight road at 10 m/s, seen every other frame, with a car 1.8 m wide on it `car_at` metres ahead (None:
+  no segmentation at all); the model's lead 0.1 m further each frame, 20 m to 23.9 m, at `lead_prob` (a logit).
+  `wide`: the segmentations are the wide frame's."""
   fields = [('plan', 2 * IDX_N * 15), ('lane_lines', 2 * 4 * IDX_N * 2), ('lane_lines_prob', 8), ('road_edges', 2 * 2 * IDX_N * 2),
             ('lead', 2 * 3 * 6 * 4), ('lead_prob', 3), ('pose', 12)]
   meta = {
@@ -118,7 +118,7 @@ def synthetic_drive(path: Path, frames: int = 40, car_at: float | None = 20.0, w
   edges[0, 0, :, 0], edges[0, 1, :, 0] = -7.0, 7.0
   raw['road_edges'] = edges
   raw['lead'] = np.zeros(2 * 3 * 6 * 4, np.float32)
-  raw['lead_prob'] = np.full(3, 5.0, np.float32)
+  raw['lead_prob'] = np.full(3, lead_prob, np.float32)
   pose = np.zeros(12, np.float32)
   pose[0] = 10.0
   raw['pose'] = pose
@@ -131,7 +131,8 @@ def synthetic_drive(path: Path, frames: int = 40, car_at: float | None = 20.0, w
   qmap = np.full((128, 256), 255.0, np.float32)
   v_bot = int((47.6 + 910 * 1.22 / (car_at or 20)) / 2)
   qmap[v_bot:, :] = 0
-  qmap[v_bot - 12:v_bot, 120:136] = 1
+  half = round(910 * 0.9 / (car_at or 20) / 2)
+  qmap[v_bot - 12:v_bot, 128 - half:128 + half] = 1
   label = np.full(200, 0, np.float32)
   label[1] = 1
   score = np.zeros(200, np.float32)
@@ -169,13 +170,27 @@ def test_page_engine_draws_each_frames_lead(tmp_path):
   # segmentation's car stands at 20 m, within 25% of it
   lead = out['lead']
   assert abs(lead['x'] - 23.9) < 1e-4 and abs(lead['y'] - 0.3) < 1e-6
-  assert lead['heading'] == 0 and lead['braking'] is False
+  assert lead['heading'] == 0 and lead['braking'] is False and lead['seg'] is False
 
 
 @pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page engine')
 @pytest.mark.parametrize('car_at', [None, 40.0], ids=['no segmentation', 'the car seen is further on'])
 def test_page_engine_hides_a_lead_the_segmentation_does_not_see(tmp_path, car_at):
   assert engine_state(tmp_path, car_at=car_at)['lead'] is None
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page engine')
+@pytest.mark.parametrize('lead_prob', [-5.0, 5.0], ids=['the model has no lead', 'the model has one further on'])
+def test_page_engine_draws_a_close_car_the_segmentation_alone_sees(tmp_path, lead_prob):
+  # the car stands 10 m ahead: the lead is where it meets the road, in the lane's centre, plain and never braking
+  lead = engine_state(tmp_path, car_at=10.0, lead_prob=lead_prob)['lead']
+  assert abs(lead['x'] - 10) < 0.3 and lead['y'] == 0 and lead['heading'] == 0
+  assert lead['seg'] is True and lead['braking'] is False
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page engine')
+def test_page_engine_draws_no_car_the_segmentation_alone_sees_beyond_15_m(tmp_path):
+  assert engine_state(tmp_path, car_at=16.0, lead_prob=-5.0)['lead'] is None
 
 
 @pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page engine')
