@@ -12,6 +12,7 @@
     let modelInput: Bool
     @State private var player = DioramaPlayer()
     @AppStorage("diorama.input") private var showInput = false
+    @AppStorage(DioramaCamera.storageKey) private var camera = DioramaCamera.defaults
     @Environment(\.colorScheme) private var colorScheme
 
     public init(feed: any DioramaFeed, modelInput: Bool = true) {
@@ -22,7 +23,7 @@
     public var body: some View {
       VStack(spacing: 0) {
         ZStack(alignment: .topLeading) {
-          DioramaMetalView(player: player, dark: colorScheme == .dark)
+          DioramaMetalView(player: player, dark: colorScheme == .dark, camera: camera)
           if let hud = player.hud { DioramaHUD(hud: hud).padding(14) }
           if modelInput && showInput, let picture = player.input {
             DioramaInputView(picture: picture)
@@ -214,6 +215,7 @@
     }
   }
 
+
   #if os(macOS)
     typealias PlatformViewRepresentable = NSViewRepresentable
   #else
@@ -225,6 +227,11 @@
   struct DioramaMetalView: PlatformViewRepresentable {
     let player: DioramaPlayer
     let dark: Bool
+    var camera = DioramaCamera.defaults
+    /// One view whatever the drive's view chooser says.
+    var fixedView: Double?
+    /// The still scene the camera is set over, instead of the player's drive.
+    var preview = false
 
     func makeCoordinator() -> Coordinator { Coordinator(player: player) }
 
@@ -258,6 +265,13 @@
         coordinator.renderer?.theme = dark ? .dark : .light
         coordinator.setNeedsDisplay()
       }
+      if let renderer = coordinator.renderer, renderer.camera != camera || renderer.fixedView != fixedView || coordinator.preview != preview {
+        renderer.camera = camera
+        renderer.fixedView = fixedView
+        renderer.pathShortOfLead = preview ? DioramaRenderer.previewPathShortOfLead : 3
+        coordinator.preview = preview
+        coordinator.setNeedsDisplay()
+      }
     }
 
     @MainActor
@@ -266,26 +280,42 @@
       let renderer: DioramaRenderer?
       weak var view: MTKView?
       var dark: Bool?
+      var preview = false
 
       init(player: DioramaPlayer) {
         self.player = player
         renderer = MTLCreateSystemDefaultDevice().flatMap { DioramaRenderer(device: $0) }
       }
 
+      private var drawPending = false
+
+      /// Draws once more, soon: once for however many asks come before it does.
       func setNeedsDisplay() {
         #if os(macOS)
-          view?.needsDisplay = true
+          // An MTKView drawn on demand by needsDisplay stops drawing once its window is
+          // closed and opened again, as the camera's window is: SwiftUI keeps the view,
+          // and AppKit never asks it to draw again. Drawing it directly always does.
+          guard !drawPending else { return }
+          drawPending = true
+          DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.drawPending = false
+            self.view?.draw()
+          }
         #else
           view?.setNeedsDisplay()
         #endif
       }
 
-      nonisolated func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+      /// A new size draws again: with no drive playing, nothing else would.
+      nonisolated func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        MainActor.assumeIsolated { setNeedsDisplay() }
+      }
 
       nonisolated func draw(in view: MTKView) {
         MainActor.assumeIsolated {
           guard let renderer, let pass = view.currentRenderPassDescriptor else { return }
-          let frame = player.box.with { renderer.take($0) }
+          let frame = preview ? DioramaRenderer.preview : player.box.with { renderer.take($0) }
           renderer.draw(frame, to: pass, size: view.drawableSize) { commands in
             if let drawable = view.currentDrawable { commands.present(drawable) }
           }

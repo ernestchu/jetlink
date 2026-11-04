@@ -214,6 +214,9 @@ public struct DioramaOutputs: Sendable {
   public var laneLinesProb: [Double] = [], leadProb: [Double] = []
   public var lead: [Double] = [], leadStds: [Double] = []  // (3, 6, 4): x, y, v, a
 
+  /// None of the heads, to fill by hand: a still scene, as the apps' camera setup draws.
+  public init() {}
+
   public func plan(_ i: Int, _ c: Int) -> Double { plan[i * Diorama.planWidth + c] }
   public static func line(_ l: [Double], _ line: Int, _ i: Int, _ c: Int) -> Double { l[(line * Diorama.idxN + i) * 2 + c] }
   public func lead(_ sel: Int, _ t: Int, _ c: Int) -> Double { lead[(sel * Diorama.leadLen + t) * Diorama.leadWidth + c] }
@@ -470,6 +473,10 @@ public final class DioramaScene {
   /// the segmentation alone shows it, the model having none there.
   public struct Lead: Sendable {
     public let x: Double, y: Double, heading: Double, braking: Bool, seg: Bool
+
+    public init(x: Double, y: Double, heading: Double, braking: Bool, seg: Bool) {
+      (self.x, self.y, self.heading, self.braking, self.seg) = (x, y, heading, braking, seg)
+    }
   }
 
   /// One frame's scene.
@@ -486,6 +493,15 @@ public final class DioramaScene {
     public let view: Double, viewWhy: String
     /// Speed (m/s), acceleration (m/s²), the lead's distance.
     public let speed: Double, accel: Double, leadDistance: Double?
+
+    public init(
+      frame: Int, seconds: Double, out: DioramaOutputs, px: [Double], py: [Double], pz: [Double], lead: Lead?, pose: SIMD3<Double>,
+      stripes: [[SIMD2<Double>]], view: Double, viewWhy: String, speed: Double, accel: Double, leadDistance: Double?
+    ) {
+      (self.frame, self.seconds, self.out, self.px, self.py, self.pz, self.lead) = (frame, seconds, out, px, py, pz, lead)
+      (self.pose, self.stripes, self.view, self.viewWhy) = (pose, stripes, view, viewWhy)
+      (self.speed, self.accel, self.leadDistance) = (speed, accel, leadDistance)
+    }
   }
 
   public struct Timing: Sendable {

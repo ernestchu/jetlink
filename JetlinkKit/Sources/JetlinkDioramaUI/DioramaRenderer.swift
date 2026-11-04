@@ -4,6 +4,126 @@
   import Metal
   import simd
 
+  /// Each view's camera, set by hand in the apps' Settings and kept by each app: what
+  /// the view's default look-at becomes once moved, and turned about the ego car's
+  /// middle on the road. Pitch turns the whole camera about the car and zoom scales
+  /// the picture about the car, so neither moves the car on screen; forward slides the
+  /// camera along the road, level with it.
+  ///
+  /// The camera's offset is kept in the frame pitch turns, so pitch leaves it alone:
+  /// `forward` and `rise` are metres along the default view's forward and up, which
+  /// pitch then turns about the car with the rest of the camera. Zoom keeps the car in
+  /// place by moving the picture (`shift`), which only zoom changes: moving forward then
+  /// moves the camera and nothing else, and pitch, turning the camera rigidly about the
+  /// car, keeps it on its pixel.
+  public struct DioramaCamera: Equatable, Sendable, RawRepresentable {
+    public struct View: Equatable, Sendable {
+      /// The focal length over the image's width.
+      public var zoom: Double
+      /// How far the camera is turned about the ego car's middle: the degrees the default
+      /// eye, once turned, sits above the car, seen from its middle.
+      public var pitch: Double
+      /// Metres the camera has moved forward, back when negative: along the road at the
+      /// default pitch, and turned with the camera by any other.
+      public var forward: Double
+      /// Metres the camera has moved up, in the same turned frame: what moving forward
+      /// along the road at another pitch adds. Not shown; it follows from the gestures.
+      public var rise: Double
+      /// How far down the picture is moved, in image widths: what zooming about the car
+      /// leaves. Not shown; only zoom changes it.
+      public var shift: Double
+
+      public init(zoom: Double, pitch: Double, forward: Double, rise: Double = 0, shift: Double = 0) {
+        self.zoom = zoom
+        self.pitch = pitch
+        self.forward = forward
+        self.rise = rise
+        self.shift = shift
+      }
+    }
+
+    public var road: View
+    public var bird: View
+
+    public init(road: View, bird: View) {
+      self.road = road
+      self.bird = bird
+    }
+
+
+    /// Each view's default: the first camera further back with as much more zoom, the
+    /// picture moved so the car sits where the first camera drew it.
+    public static let defaults = DioramaCamera(road: defaultView(0), bird: defaultView(1))
+
+    /// The view the default eye gives: its angle above the pivot, and the first zoom
+    /// scaled up from there with the picture moved to keep the car in place.
+    static func defaultView(_ view: Int) -> View {
+      let eye = view == 0 ? DioramaRenderer.roadEye(0).eye : DioramaRenderer.birdEye(0).eye
+      let first = view == 0 ? DioramaRenderer.firstZoom.road : DioramaRenderer.firstZoom.bird
+      var v = View(zoom: first, pitch: pitch(eye, 0), forward: 0)
+      zoom(&v, to: first * DioramaRenderer.defaultBack, view: view)
+      return v
+    }
+
+    /// How far below the camera's axis the ego car's middle is, as a slope (down over
+    /// forward), or nil when the camera has moved past it.
+    static func carSlope(_ v: View, view: Int) -> Double? {
+      let at = DioramaRenderer.place(view == 0 ? DioramaRenderer.roadEye(0) : DioramaRenderer.birdEye(0), v, 0)
+      let car = Diorama.m3vec(at.rotation, [DioramaRenderer.pivotX - at.center[0], -at.center[1], -at.center[2]])
+      return car[0] > 1e-6 ? car[2] / car[0] : nil
+    }
+
+    /// Zooms a view about the ego car: the picture moves so the car keeps its pixel. No
+    /// limit but the one there has to be: a focal length above zero.
+    public static func zoom(_ v: inout View, to zoom: Double, view: Int) {
+      guard zoom.isFinite, zoom > 0 else { return }
+      if let d = carSlope(v, view: view) { v.shift += (v.zoom - zoom) * d }
+      v.zoom = zoom
+    }
+
+    /// Metres from the default eye to the pivot.
+    static func distance(_ eye: [Double], _ hgt: Double) -> Double { hypot(DioramaRenderer.pivotX - eye[0], hgt - eye[2]) }
+
+    /// How far each view's default camera sits from the ego car's middle.
+    public static func distance(view: Int) -> Double { distance(view == 0 ? DioramaRenderer.roadEye(0).eye : DioramaRenderer.birdEye(0).eye, 0) }
+
+    /// Moves a view's camera `metres` forward along the road, level with it, whatever
+    /// its pitch: the offset in the turned frame takes the road's forward turned back.
+    public static func moveForward(_ v: inout View, _ metres: Double, view: Int) {
+      let a = (defaults[view].pitch - v.pitch) * .pi / 180
+      v.forward += metres * cos(a)
+      v.rise -= metres * sin(a)
+    }
+
+    /// Degrees an eye sits above the pivot, the road at `hgt`.
+    static func pitch(_ eye: [Double], _ hgt: Double) -> Double { atan2(hgt - eye[2], DioramaRenderer.pivotX - eye[0]) * 180 / .pi }
+
+    /// 0 the road view, 1 the bird's-eye.
+    public subscript(view: Int) -> View {
+      get { view == 0 ? road : bird }
+      set { if view == 0 { road = newValue } else { bird = newValue } }
+    }
+
+    /// Ten numbers, the road view's zoom, pitch, forward, rise and shift and then the
+    /// bird's-eye's, for @AppStorage.
+    public init?(rawValue: String) {
+      let n = rawValue.split(separator: " ").compactMap { Double($0) }
+      // as kept, with no limits: only a zoom above zero, which a focal length has to be
+      guard n.count == 10, n.allSatisfy(\.isFinite), n[0] > 0, n[5] > 0 else { return nil }
+      road = View(zoom: n[0], pitch: n[1], forward: n[2], rise: n[3], shift: n[4])
+      bird = View(zoom: n[5], pitch: n[6], forward: n[7], rise: n[8], shift: n[9])
+    }
+
+    public var rawValue: String {
+      [road, bird].flatMap { [$0.zoom, $0.pitch, $0.forward, $0.rise, $0.shift] }.map { "\($0)" }.joined(separator: " ")
+    }
+
+    /// The key each app keeps it under in its own UserDefaults. No dot in it: @AppStorage
+    /// watches its key by key-value observing, which takes a dot for a key path, and then
+    /// a view drawing the drive would never hear of a camera saved in another window.
+    public static let storageKey = "dioramaCamera"
+  }
+
   /// Diorama's renderer: the scene in Metal, as diorama-render.js draws it in
   /// WebGL2, so the apps and the page look the same. Pure CGI, nothing from a
   /// camera is drawn. A virtual camera follows the ego car from behind at
@@ -31,6 +151,12 @@
 
     let device: MTLDevice
     var theme = Theme.dark
+    /// Each view's camera, as the app keeps it.
+    var camera = DioramaCamera.defaults
+    /// One view whatever the drive's view chooser says: 0 the road view, 1 the bird's-eye.
+    var fixedView: Double?
+    /// How far short of the lead the planned path stops: 3 m on a drive.
+    var pathShortOfLead = 3.0
     private let queue: MTLCommandQueue
     private let sky, ground, decal, mesh, maskRoad, maskPaint: MTLRenderPipelineState
     private let depthWrite, depthTestOnly, depthOff: MTLDepthStencilState
@@ -170,15 +296,72 @@
 
     // MARK: the virtual camera
 
+    /// The two views' first cameras: where the eye sat and what it looked at, in the road
+    /// frame (x forward, z down) with the road at `hgt`, and their zooms.
+    static func firstRoadEye(_ hgt: Double) -> (eye: [Double], target: [Double]) { ([Diorama.egoRear - 6.5, 0, hgt - 3.2], [18, 0, hgt]) }
+    static func firstBirdEye(_ hgt: Double) -> (eye: [Double], target: [Double]) { ([-14, 0, hgt - 30], [10, 0, hgt]) }
+    static let firstZoom = (road: 0.62, bird: 0.69)
+
+    /// How many times further back than the first cameras the default views sit, along
+    /// the line to the car and looking the same way, with as many times the zoom: the
+    /// car the same size on the same pixel, but seen from further away, so the
+    /// perspective stretches it less where it reaches the edge of the picture.
+    static let defaultBack = 2.2
+
+    /// Each view's default camera: the first one moved `defaultBack` times as far from the car.
+    static func roadEye(_ hgt: Double) -> (eye: [Double], target: [Double]) { back(firstRoadEye(hgt), hgt) }
+    static func birdEye(_ hgt: Double) -> (eye: [Double], target: [Double]) { back(firstBirdEye(hgt), hgt) }
+
+    /// An eye moved away from the pivot along the line to it, its target with it, so it looks the same way.
+    private static func back(_ at: (eye: [Double], target: [Double]), _ hgt: Double) -> (eye: [Double], target: [Double]) {
+      let p = [pivotX, 0, hgt], k = defaultBack
+      let eye = (0..<3).map { p[$0] + k * (at.eye[$0] - p[$0]) }
+      return (eye, (0..<3).map { at.target[$0] + eye[$0] - at.eye[$0] })
+    }
+    /// What the camera turns about and moves to and from: the ego car's middle, on the road.
+    static var pivotX: Double { (Diorama.egoFront + Diorama.egoRear) / 2 }
+
+    /// One view placed by hand: its default eye moved by its offset, then the whole
+    /// camera turned about the pivot from the default pitch to `pitch`. The turn is rigid
+    /// about the car, so the car stays on the same pixel whatever the offset.
+    static func place(_ at: (eye: [Double], target: [Double]), _ v: DioramaCamera.View, _ hgt: Double) -> (rotation: [Double], center: [Double]) {
+      let turn = lookAt(at.eye, at.target)
+      let a = (DioramaCamera.pitch(at.eye, hgt) - v.pitch) * .pi / 180
+      let e = [at.eye[0] + v.forward - pivotX, 0, at.eye[2] - v.rise - hgt]  // from the pivot, z down
+      if a == 0 { return (turn, [pivotX + e[0], 0, hgt + e[2]]) }
+      let c = cos(a), s = sin(a)
+      // Ry(a) = [[c, 0, s], [0, 1, 0], [-s, 0, c]] turns the eye about the pivot, and the view with it
+      return (Diorama.m3mul(turn, [c, 0, -s, 0, 1, 0, s, 0, c]), [pivotX + c * e[0] + s * e[2], 0, hgt - s * e[0] + c * e[2]])
+    }
+
     /// The camera for a view between the chase camera (0) and the bird's-eye view (1).
-    static func camera(_ s: Double, _ hgt: Double, _ w: Double, _ h: Double) -> (f: Double, cx: Double, cy: Double, rotation: [Double], center: [Double]) {
-      let chaseAt = [Diorama.egoRear - 6.5, 0, hgt - 3.2], chaseTurn = lookAt(chaseAt, [18, 0, hgt])
-      let birdAt = [-14, 0, hgt - 30], birdTurn = lookAt(birdAt, [10, 0, hgt])
-      let rel = logRot(Diorama.m3mul(birdTurn, transpose3(chaseTurn)))
-      let rotation = Diorama.m3mul(rodrigues(rel.map { $0 * s }), chaseTurn)
+    /// In either view the principal point is moved down by its shift, which zoom sets so
+    /// the picture scales about the ego car. Between them, the picture is moved so the
+    /// car goes straight from where one view draws it to where the other does, and so
+    /// stays in the picture all the way.
+    static func camera(_ s: Double, _ hgt: Double, _ w: Double, _ h: Double, _ setup: DioramaCamera = .defaults) -> (
+      f: Double, cx: Double, cy: Double, rotation: [Double], center: [Double]
+    ) {
+      let chase = place(roadEye(hgt), setup.road, hgt), bird = place(birdEye(hgt), setup.bird, hgt)
+      let rel = logRot(Diorama.m3mul(bird.rotation, transpose3(chase.rotation)))
+      let rotation = Diorama.m3mul(rodrigues(rel.map { $0 * s }), chase.rotation)
       // rise a bit faster than it moves back
-      let center = [chaseAt[0] + (birdAt[0] - chaseAt[0]) * s, chaseAt[1] + (birdAt[1] - chaseAt[1]) * s, chaseAt[2] + (birdAt[2] - chaseAt[2]) * pow(s, 0.7)]
-      return ((0.62 * (1 - s) + 0.69 * s) * w, w / 2, (0.42 * (1 - s) + 0.5 * s) * h, rotation, center)
+      let a = chase.center, b = bird.center
+      let center = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s, a[2] + (b[2] - a[2]) * pow(s, 0.7)]
+      let lerp = { (r: Double, b: Double) in r * (1 - s) + b * s }
+      let f = lerp(setup.road.zoom, setup.bird.zoom) * w
+      var cy = lerp(0.42, 0.5) * h + lerp(setup.road.shift, setup.bird.shift) * w
+      // how far below the axis the car is, as a slope, seen from a camera; nil when behind it
+      func slope(_ r: [Double], _ c: [Double]) -> Double? {
+        let car = Diorama.m3vec(r, [pivotX - c[0], -c[1], hgt - c[2]])
+        return car[0] > 1e-6 ? car[2] / car[0] : nil
+      }
+      if s > 0, s < 1, let d = slope(rotation, center), let dr = slope(chase.rotation, chase.center), let db = slope(bird.rotation, bird.center) {
+        let road = setup.road.zoom * w * dr + 0.42 * h + setup.road.shift * w
+        let birdY = setup.bird.zoom * w * db + 0.5 * h + setup.bird.shift * w
+        cy = lerp(road, birdY) - f * d
+      }
+      return (f, w / 2, cy, rotation, center)
     }
 
     static func rodrigues(_ r: [Double]) -> [Double] {
@@ -284,6 +467,28 @@
       let mapUploaded: Bool
     }
 
+    /// The still scene the camera is set over, the same whatever the comma is doing:
+    /// the ego car on a straight road between two lane lines, a lead 10 m ahead of its
+    /// bumper, and the planned path stopping 2 m short of it. Only the driving model's
+    /// kind of drawing; nothing from the segmentation.
+    static let preview: Frame = {
+      let n = Diorama.idxN, xs = Diorama.xIdxs
+      var out = DioramaOutputs()
+      func lines(_ ys: [Double]) -> [Double] { ys.flatMap { y in (0..<n).flatMap { _ in [y, 0] } } }
+      out.laneLines = lines([-5.4, -1.8, 1.8, 5.4])
+      out.laneLinesStds = Array(repeating: 0.1, count: out.laneLines.count)
+      out.laneLinesProb = [1, 0, 0, 1, 0, 1, 1, 0]  // the ego lane's two lines only
+      out.roadEdges = lines([-5.6, 5.6])
+      out.roadEdgesStds = Array(repeating: 0.1, count: out.roadEdges.count)
+      let lead = DioramaScene.Lead(x: Diorama.egoFront + 10, y: 0, heading: 0, braking: false, seg: false)
+      let state = DioramaScene.State(
+        frame: 0, seconds: 0, out: out, px: xs, py: Array(repeating: 0, count: n), pz: Array(repeating: 0, count: n), lead: lead,
+        pose: .zero, stripes: [], view: 0, viewWhy: "", speed: 0, accel: 0, leadDistance: lead.x)
+      return Frame(state: state, height: 1.22, origin: nil, mapUploaded: false)
+    }()
+    /// How far short of the lead the preview's path stops.
+    static let previewPathShortOfLead = 2.0
+
     /// Takes what the frame needs from the scene. Call under the scene's lock.
     func take(_ scene: DioramaScene) -> Frame {
       var uploaded = false
@@ -333,7 +538,7 @@
         enc.endEncoding()
       }
 
-      let camv = Self.camera(frame.state?.view ?? 0, hgt, w, h)
+      let camv = Self.camera(fixedView ?? frame.state?.view ?? 0, hgt, w, h, camera)
       let near = 0.3, far = 500.0
       let proj = [
         2 * camv.f / w, 0, 2 * camv.cx / w - 1, 0,
@@ -478,7 +683,7 @@
         Self.polygon(&tris, q, hgt, th.paint, 0.9)
       }
       // the planned path, cut before the lead
-      let px = state.px, maxD = state.lead.map { max($0.x - 3, 0) } ?? 80
+      let px = state.px, maxD = state.lead.map { max($0.x - pathShortOfLead, 0) } ?? 80
       var pts: [SIMD3<Double>] = []
       for i in 0..<Diorama.idxN {
         if px[i] >= maxD {

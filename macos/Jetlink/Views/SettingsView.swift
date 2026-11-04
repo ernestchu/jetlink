@@ -21,6 +21,7 @@ struct GeneralSettingsView: View {
   @Environment(ServerStore.self) private var server
   @Environment(UpdateStore.self) private var updates
   @State private var loginItem = LoginItem()
+  @Environment(\.openWindow) private var openWindow
 
   var body: some View {
     @Bindable var settings = settings
@@ -101,6 +102,15 @@ struct GeneralSettingsView: View {
           .font(.callout)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          LabeledContent("Camera") {
+            Button("Set Up Camera…") { openWindow(id: DioramaCameraWindow.id) }
+          }
+          Text("Where each view, the road view and the bird's-eye, looks at the car from.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
         VStack(alignment: .leading, spacing: 4) {
           Toggle("Show on iPhones nearby", isOn: $settings.dioramaShare)

@@ -164,6 +164,8 @@ let package = Package(
     .testTarget(name: "JetlinkStatusPageTests", dependencies: ["JetlinkStatusPage", "JetlinkKit", "JetlinkServer", "JetlinkTestSupport"]),
     // The packets against diorama/packets.py's bytes, and the stage on a fake engine.
     .testTarget(name: "JetlinkDioramaTests", dependencies: ["JetlinkDiorama", "JetlinkServer", "JetlinkTestSupport"], resources: [.copy("Fixtures")]),
+    // The apps' Diorama camera: its defaults against the camera before it could be set, and what pitch and dolly keep.
+    .testTarget(name: "JetlinkDioramaUITests", dependencies: ["JetlinkDioramaUI", "JetlinkDiorama"]),
     // jetlink-server's commands in process, and the built binary for what
     // only a process shows (--version beside a VERSION file, SIGTERM).
     .testTarget(
