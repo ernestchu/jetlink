@@ -9,6 +9,8 @@
   One page, two sources (the Mac and iPhone apps draw the same scene natively, DioramaScene.swift):
     live    served by jetlink-server at /diorama/, fed by /diorama/events
     drive   ?drive=drive.diorama&footage=footage.mp4: a recorded drive (python -m diorama view) beside its footage
+  diorama-camera.json beside the page, when there is one, sets each view's camera; ?camera=setup (python -m diorama
+  camera) sets it with the pointer, one view at a time, over a still scene of its own, and posts it back to save.
 -->
 <html lang="en">
 <head>
@@ -73,6 +75,23 @@
   button:hover { border-color: var(--dim); }
   .time { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 13px; white-space: nowrap; }
   .error { padding: 24px; color: var(--bad); }
+  canvas.tuning { touch-action: none; cursor: grab; }
+  canvas.tuning:active { cursor: grabbing; }
+  .camset { position: absolute; right: 14px; top: 14px; width: 260px; max-width: calc(100% - 28px); padding: 12px 14px; border-radius: 12px;
+    background: rgba(22, 23, 26, 0.9); color: #f2f2f4; display: flex; flex-direction: column; gap: 10px; }
+  .camset button { color: #f2f2f4; border-color: #44464c; }
+  .camset .views { display: flex; }
+  .camset .views button { flex: 1; border-radius: 0; }
+  .camset .views button:first-child { border-radius: 8px 0 0 8px; }
+  .camset .views button:last-child { border-radius: 0 8px 8px 0; border-left: none; }
+  .camset .views button.on { background: var(--accent); border-color: var(--accent); }
+  .camset dl { display: flex; justify-content: space-between; margin: 0; }
+  .camset dt { font-size: 11px; color: #a9abb1; text-transform: uppercase; letter-spacing: 0.06em; }
+  .camset dd { margin: 0; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .camset .row { display: flex; gap: 8px; }
+  .camset .row button { flex: 1; }
+  .camset .hint { margin: 0; font-size: 12px; color: #a9abb1; }
+  .camset .hint.bad { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -95,6 +114,17 @@
     </div>
     <div class="inputview" id="inputView" hidden><canvas id="inputCanvas" width="512" height="256"></canvas><span id="inputLabel"></span></div>
     <div class="waiting" id="waiting">Loading…</div>
+    <div class="camset" id="camset" hidden>
+      <div class="views"><button id="camRoad">Road view</button><button id="camBird">Bird's-eye</button></div>
+      <dl>
+        <div><dt>Zoom</dt><dd id="camZoom"></dd></div>
+        <div><dt>Pitch</dt><dd id="camPitch"></dd></div>
+        <div><dt>Forward</dt><dd id="camForward"></dd></div>
+      </dl>
+      <div class="row"><button id="camReset">Reset view</button><button id="camSave">Save</button></div>
+      <p class="hint">Zoom: pinch, or a mouse wheel. Pitch: drag. Forward: two fingers, or drag with the right button; down goes forward.</p>
+      <p class="hint" id="camStatus"></p>
+    </div>
   </div>
 </main>
 <footer>
@@ -103,6 +133,7 @@
   <div class="stat"><b id="segMs">–</b><span>Segmentation</span></div>
   <div class="stat"><b id="segHz">–</b><span>Perception</span></div>
   <div class="stat note" id="modelsNote" hidden><b id="modelsState"></b><span>Models</span></div>
+  <div class="stat note" id="cameraNote" hidden><b id="cameraState" class="off"></b><span>Camera</span></div>
   <label class="debug" id="inputToggle" hidden title="The frame the models see: the narrow camera, warped to 512×256"><input type="checkbox" id="showInput"> Model input</label>
   <div class="transport" id="transport" hidden>
     <button id="play">Play</button>
@@ -131,8 +162,8 @@
     if (!state) return;
     $('speed').textContent = Math.round(state.hud.v * E.MPH);
     $('lead').textContent = state.hud.lead != null ? `lead ${Math.round(state.hud.lead)} m` : '';
-    const s = state.view;
-    const why = state.viewWhy ? ` · ${state.viewWhy.toUpperCase()}` : '';
+    const held = renderer && renderer.fixedView != null, s = held ? renderer.fixedView : state.view;
+    const why = state.viewWhy && !held ? ` · ${state.viewWhy.toUpperCase()}` : '';
     $('mode').textContent = (s < 0.02 ? 'ROAD VIEW' : s > 0.98 ? "BIRD'S-EYE" : `PANNING ${Math.round(s * 100)}%`) + why;
     const a = E.clamp(state.hud.a, -3.2, 3.2), bar = $('accel');
     bar.style.top = `${50 - Math.max(a, 0) / 3.2 * 50}%`;
@@ -156,8 +187,8 @@
 
   function frame() {
     if (source.tick) source.tick();
-    if (renderer) renderer.draw(engine.state, engine);
-    hud(engine.state);
+    if (renderer) renderer.draw(...(preview ? [preview.state, preview.engine] : [engine.state, engine]));
+    if (!preview) hud(engine.state);
     requestAnimationFrame(frame);
   }
 
@@ -358,8 +389,111 @@
     };
   }
 
-  const live = !params.get('drive');
-  let source = { tick: null };
+  // ---- the camera: diorama-camera.json beside the page, where the viewer or the server has one, over the renderer's own
+  async function loadCamera() {
+    let res;
+    try { res = await fetch('diorama-camera.json', { cache: 'no-store' }); } catch (e) { return; }
+    if (res.status === 404) return;
+    try {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      renderer.views = DioramaRender.readCamera(await res.json());
+    } catch (e) {
+      $('cameraState').textContent = $('cameraState').title = `diorama-camera.json ignored: ${e.message}`;
+      $('cameraNote').hidden = false;
+    }
+  }
+
+  // ---- setting it: one view at a time, held whatever the drive asks, with the pointer, then posted back to save.
+  // Zoom is a pinch (a trackpad's comes as a wheel with ctrl) or a mouse wheel, pitch a drag, forward two fingers (a
+  // trackpad's come as a wheel) or a drag with the right button.
+  function cameraSetup() {
+    const canvas = $('scene');
+    let view = 'road', saved = JSON.stringify(renderer.views);
+    $('camset').hidden = false;
+    canvas.classList.add('tuning');
+    const show = (note) => {
+      renderer.fixedView = view === 'road' ? 0 : 1;
+      const n = renderer.views[view];
+      $('camZoom').textContent = n.zoom.toFixed(2);
+      $('camPitch').textContent = `${n.pitch.toFixed(1)}°`;
+      $('camForward').textContent = `${n.forward < 0 ? '−' : '+'}${Math.abs(n.forward).toFixed(1)} m`;
+      $('camRoad').classList.toggle('on', view === 'road');
+      $('camBird').classList.toggle('on', view === 'bird');
+      $('camStatus').textContent = note || (JSON.stringify(renderer.views) === saved ? '' : 'Not saved');
+      $('camStatus').classList.remove('bad');
+    };
+    const zoomBy = (r) => { DioramaRender.zoomView(renderer.views, view, r); show(); };
+    const pitchBy = (dy) => { renderer.views[view].pitch += dy * 0.25; show(); };  // down shows it from higher, as if dragging the world
+    const forwardBy = (dy) => { DioramaRender.moveForward(renderer.views, view, dy); show(); };  // down pulls the road back under it
+
+    // a mouse's wheel turns in notches (lines, or 120ths of the old wheelDelta) and only up and down; a trackpad scrolls
+    // by the pixel, and once a scroll looks like one the rest of it is
+    let trackpadAt = -Infinity;
+    const mouseWheel = (e) => {
+      if (e.deltaMode !== 0) return true;
+      if (e.deltaX !== 0 || !e.wheelDeltaY || e.wheelDeltaY % 120 !== 0) trackpadAt = e.timeStamp;
+      return e.timeStamp - trackpadAt > 300;
+    };
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+      if (e.ctrlKey) zoomBy(Math.exp(-px * 0.01));
+      else if (mouseWheel(e)) zoomBy(Math.exp(-px * 0.0015));
+      else forwardBy(-px);  // fingers down scroll up, and go forward
+    }, { passive: false });
+
+    // touches: one drags the pitch, two pinch the zoom and move forward together; a mouse's left button drags the
+    // pitch, its right forward
+    const at = new Map();
+    let pinched = false;  // two fingers were down: the one left does nothing until it lifts
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 2) return;
+      canvas.setPointerCapture(e.pointerId);
+      at.set(e.pointerId, [e.clientX, e.clientY]);
+      if (at.size > 1) pinched = true;
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      const was = at.get(e.pointerId);
+      if (!was) return;
+      const now = [e.clientX, e.clientY], dy = now[1] - was[1];
+      at.set(e.pointerId, now);
+      if (e.pointerType === 'touch' && at.size > 1) {
+        const other = [...at].find(([id]) => id !== e.pointerId)[1];
+        const before = Math.hypot(was[0] - other[0], was[1] - other[1]), after = Math.hypot(now[0] - other[0], now[1] - other[1]);
+        if (before > 0) zoomBy(after / before);
+        forwardBy(dy / 2);  // the middle of the two
+      } else if (e.pointerType === 'mouse' && e.buttons & 2) forwardBy(dy);
+      else if (!pinched) pitchBy(dy);
+    });
+    const up = (e) => { at.delete(e.pointerId); if (!at.size) pinched = false; };
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointercancel', up);
+
+    $('camRoad').onclick = () => { view = 'road'; show(); };
+    $('camBird').onclick = () => { view = 'bird'; show(); };
+    $('camReset').onclick = () => { renderer.views[view] = DioramaRender.defaultCamera()[view]; show(); };
+    $('camSave').onclick = async () => {
+      const file = {};
+      for (const [k, n] of Object.entries(renderer.views)) file[k] = { zoom: +n.zoom.toFixed(3), pitch: +n.pitch.toFixed(2), forward: +n.forward.toFixed(2), rise: +n.rise.toFixed(2), shift: +n.shift.toFixed(4) };
+      try {
+        const res = await fetch('diorama-camera.json', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(file) });
+        const text = (await res.text()).trim();
+        if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+        renderer.views = DioramaRender.readCamera(file);
+        saved = JSON.stringify(renderer.views);
+        show(`Saved to ${text}`);
+        $('cameraNote').hidden = true;
+      } catch (e) {
+        $('camStatus').textContent = `Not saved: ${e.message}`;
+        $('camStatus').classList.add('bad');
+      }
+    };
+    show();
+  }
+
+  const setup = params.get('camera') === 'setup', live = !setup && !params.get('drive');
+  let source = { tick: null }, preview = null;
   (async () => {
     try {
       const assets = await (await fetch('diorama-assets.bin')).arrayBuffer();
@@ -368,7 +502,16 @@
       $('main').innerHTML = `<div class="error">Diorama cannot draw here: ${e.message}</div>`;
       return;
     }
-    if (params.get('drive')) source = await driveSource(params.get('drive'), params.get('footage'));
+    await loadCamera();
+    if (setup) {
+      // no drive and no footage: the camera is set over a scene of its own
+      preview = DioramaRender.previewScene();
+      $('hud').hidden = true;
+      document.querySelector('footer').hidden = true;
+      $('src').textContent = 'Camera setup';
+      wait('');
+      cameraSetup();
+    } else if (params.get('drive')) source = await driveSource(params.get('drive'), params.get('footage'));
     else source = liveSource();
     setInterval(stats, 500);
     requestAnimationFrame(frame);

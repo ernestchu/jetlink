@@ -135,6 +135,65 @@ void main() {
   }
   const transpose3 = (A) => [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]];
 
+  // Each view's camera, which `python -m diorama camera` sets: zoom, the focal length over the image width; pitch,
+  // the degrees the camera sits above the ego car, seen from the car's middle on the road; and forward and rise,
+  // metres the eye is moved along the default view's forward and up; and shift, how far down the picture is
+  // moved, in image widths. Pitch turns the whole camera, moved eye and all, about the car's middle, and zoom
+  // (zoomView) scales the picture about the car by moving it, so neither moves the car on screen. The setup page
+  // moves forward and rise together, so the camera slides along the road, level, at any pitch, and nothing else.
+  // The defaults are the first views (an eye and the point on the road it looks at, as [x forward, height above
+  // the road], and a zoom) moved BACK times as far from the car along the line to it, looking the same way, with
+  // BACK times the zoom: the car the same size and in the same place, but seen from further off, so the
+  // perspective stretches it less near the edge of the picture. Zoom keeps the car where the first views drew it.
+  const PIVOT_X = (EGO_FRONT + EGO_REAR) / 2, BACK = 2.2;
+  const VIEWS = {
+    road: { first: { eye: [EGO_REAR - 6.5, 3.2], at: [18, 0], zoom: 0.62 }, cy: 0.42 },
+    bird: { first: { eye: [-14, 30], at: [10, 0], zoom: 0.69 }, cy: 0.5 },
+  };
+  for (const v of Object.values(VIEWS)) {
+    const { eye, at, zoom } = v.first, d = [(BACK - 1) * (eye[0] - PIVOT_X), (BACK - 1) * eye[1]];
+    v.eye = [eye[0] + d[0], eye[1] + d[1]];
+    v.at = [at[0] + d[0], at[1] + d[1]];
+    v.zoom = BACK * zoom;
+    v.pitch = Math.atan2(v.eye[1], PIVOT_X - v.eye[0]) * 180 / Math.PI;
+    v.r = Math.hypot(PIVOT_X - v.eye[0], v.eye[1]);  // the camera's distance from the car, as pitch turns it
+  }
+  // no limits: any finite numbers, but a zoom above 0, a focal length
+  const CAMERA_NUMBERS = ['zoom', 'pitch', 'forward', 'rise', 'shift'];
+  // each view at its first zoom, zoomed to its own about the car: the car where the first view drew it
+  const defaultCamera = () => Object.fromEntries(Object.entries(VIEWS).map(([k, v]) => {
+    const cam = { [k]: { zoom: v.first.zoom, pitch: v.pitch, forward: 0, rise: 0, shift: 0 } };
+    zoomView(cam, k, v.zoom / v.first.zoom);
+    cam[k].zoom = v.zoom;  // exactly, not by a ratio
+    return [k, cam[k]];
+  }));
+  // a camera file's views over the defaults, or why it is wrong
+  function readCamera(file) {
+    const cam = defaultCamera();
+    if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error('it is not a JSON object');
+    for (const [view, nums] of Object.entries(file)) {
+      if (!(view in cam)) throw new Error(`"${view}" is not a view: road or bird`);
+      if (!nums || typeof nums !== 'object' || Array.isArray(nums)) throw new Error(`${view} is not an object`);
+      for (const [k, v] of Object.entries(nums)) {
+        if (!CAMERA_NUMBERS.includes(k)) throw new Error(`${view}.${k} is not a camera number: zoom, pitch, forward, rise or shift`);
+        if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${view}.${k} is ${JSON.stringify(v)}, not a number`);
+        if (k === 'zoom' && !(v > 0)) throw new Error(`${view}.zoom is ${v}, not above 0`);
+        cam[view][k] = v;
+      }
+    }
+    return cam;
+  }
+  const turn = (v, n) => (v.pitch - n.pitch) * Math.PI / 180;  // the car's pitch from the default's, about y
+  // a view's eye and turn, for its numbers, on a road `hgt` below the device
+  function placed(v, n, hgt) {
+    const a = turn(v, n), c = Math.cos(a), s = Math.sin(a);
+    const ex = v.eye[0] + n.forward - PIVOT_X, ez = -v.eye[1] - n.rise;  // the moved eye from the car, z down
+    const C = [PIVOT_X + c * ex + s * ez, 0, hgt - s * ex + c * ez];  // turned about the car: Ry(a) e
+    const M = lookAt([v.eye[0], 0, hgt - v.eye[1]], [v.at[0], 0, hgt - v.at[1]]);
+    if (a === 0) return { C, M };
+    return { C, M: E.m3mul(M, [c, 0, -s, 0, 1, 0, s, 0, c]) };  // the default's turn, then the car's pitch: M Ry(a)^T
+  }
+
   // 4x4 row-major, and a column-major copy for GL
   const m4mul = (A, B) => { const C = new Float64Array(16); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let s = 0; for (let k = 0; k < 4; k++) s += A[4 * i + k] * B[4 * k + j]; C[4 * i + j] = s; } return C; };
   const gl4 = (A) => Float32Array.from([0, 1, 2, 3].flatMap((j) => [A[j], A[4 + j], A[8 + j], A[12 + j]]));
@@ -184,6 +243,8 @@ void main() {
       if (!gl) throw new Error('this browser has no WebGL2');
       this.gl = gl; this.canvas = canvas;
       this.t = THEMES[theme] || THEMES.dark;
+      this.views = defaultCamera();  // each view's zoom, pitch and forward
+      this.fixedView = null;  // 0 or 1 holds the road or the bird's-eye view, whatever the engine asks
       this.prog = {};
       for (const [name, [vs, fs]] of Object.entries(SHADERS)) this.prog[name] = this.program(vs, fs);
       this.aniso = gl.getExtension('EXT_texture_filter_anisotropic');
@@ -287,12 +348,22 @@ void main() {
 
     // the virtual camera for a view between the chase camera (0) and the bird's-eye view (1)
     camera(s, hgt, w, h) {
-      const Cc = [EGO_REAR - 6.5, 0, hgt - 3.2], Mc = lookAt(Cc, [18, 0, hgt]);
-      const Cb = [-14, 0, hgt - 30], Mb = lookAt(Cb, [10, 0, hgt]);
+      const n = this.views, { C: Cc, M: Mc } = placed(VIEWS.road, n.road, hgt), { C: Cb, M: Mb } = placed(VIEWS.bird, n.bird, hgt);
       const rel = logRot(E.m3mul(Mb, transpose3(Mc)));
       const M = E.m3mul(rodrigues(rel.map((v) => v * s)), Mc);
       const C = [Cc[0] + (Cb[0] - Cc[0]) * s, Cc[1] + (Cb[1] - Cc[1]) * s, Cc[2] + (Cb[2] - Cc[2]) * s ** 0.7];  // rise a bit faster than it moves back
-      const f = (0.62 * (1 - s) + 0.69 * s) * w, cy = (0.42 * (1 - s) + 0.5 * s) * h;
+      const f = (n.road.zoom * (1 - s) + n.bird.zoom * s) * w;
+      // each view's picture moved by its shift; between them, the car goes straight from where one draws it to where
+      // the other does (unless a camera is past it: then the shift is blended)
+      const c0 = (v) => VIEWS[v].cy * h + n[v].shift * w;
+      let cy = c0('road') * (1 - s) + c0('bird') * s;
+      if (s > 0 && s < 1) {
+        const d = carSlope(C, M, hgt), dr = carSlope(Cc, Mc, hgt), db = carSlope(Cb, Mb, hgt);
+        if (d !== null && dr !== null && db !== null) {
+          const u = (v, dv) => n[v].zoom * w * dv + c0(v);
+          cy = u('road', dr) * (1 - s) + u('bird', db) * s - f * d;
+        }
+      }
       return { f, cx: w / 2, cy, M, C };
     }
 
@@ -313,7 +384,7 @@ void main() {
       gl.colorMask(true, true, true, true);
 
       gl.viewport(0, 0, w, h);
-      const camv = this.camera(state ? state.view : 0, hgt, w, h);
+      const camv = this.camera(this.fixedView ?? (state ? state.view : 0), hgt, w, h);
       const near = 0.3, far = 500;
       const proj = [2 * camv.f / w, 0, 2 * camv.cx / w - 1, 0, 0, -2 * camv.f / h, 1 - 2 * camv.cy / h, 0, 0, 0, (far + near) / (far - near), -2 * far * near / (far - near), 0, 0, 1, 0];
       const R = E.m3mul(E.VIEW_FROM_DEVICE, camv.M), C = camv.C;
@@ -440,7 +511,7 @@ void main() {
         }
       }
       // the planned path, cut before the lead
-      const px = state.px, maxD = state.lead ? Math.max(state.lead.x - 3, 0) : 80;
+      const px = state.px, maxD = state.lead ? Math.max(state.lead.x - (state.pathGap ?? 3), 0) : 80;
       const pts = [];
       for (let i = 0; i < IDX_N; i++) {
         if (px[i] >= maxD) {
@@ -511,5 +582,41 @@ void main() {
     }
   }
 
-  root.DioramaRender = { Renderer, THEMES };
+  // the car's middle on the road, down over forward, as the camera at C turned M sees it; null when it is behind
+  function carSlope(C, M, hgt = 0) {
+    const [Z, , Y] = E.m3vec(M, [PIVOT_X - C[0], -C[1], hgt - C[2]]);
+    return Z > 1e-6 ? Y / Z : null;
+  }
+  // `view` zoomed by `ratio` about the car: the picture moved so the car stays on its pixel
+  function zoomView(cam, view, ratio) {
+    const n = cam[view], z = n.zoom * ratio;
+    if (!(Number.isFinite(z) && z > 0)) return;
+    const { C, M } = placed(VIEWS[view], n, 0), d = carSlope(C, M);
+    if (d !== null) n.shift += (n.zoom - z) * d;
+    n.zoom = z;
+  }
+
+  // the camera setup's still scene of its own, whatever drives or not: the ego car, a lead 10 m ahead, the planned
+  // path stopping 2 m short of it and the ego lane's two lines, all straight, and nothing from the segmentation
+  function previewScene() {
+    const lines = (...ys) => ys.flatMap((y) => X_IDXS.flatMap(() => [y, 0]));
+    const out = {
+      lane_lines: lines(-5.4, -1.8, 1.8, 5.4), lane_lines_prob: [0, 0, 0, 1, 0, 1, 0, 0],
+      road_edges: lines(-5.6, 5.6), road_edges_stds: new Array(2 * IDX_N * 2).fill(0),
+    };
+    const state = {
+      out, px: [...X_IDXS], py: X_IDXS.map(() => 0), lead: { x: EGO_FRONT + 10, y: 0, heading: 0, braking: false, seg: false },
+      pathGap: 2, pose: null, stripes: [], view: 0, viewWhy: '', hud: { v: 0, a: 0, lead: 10 },
+    };
+    return { state, engine: { cam: null, roadmap: null } };
+  }
+
+  // `view`'s camera moved m metres along the road, level, whatever its pitch: forward and rise in the turned frame.
+  // A drag moves it 0.005 of the default eye's distance from the car a pixel.
+  function moveForward(cam, view, pixels) {
+    const v = VIEWS[view], n = cam[view], m = pixels * 0.005 * v.r, a = turn(v, n);
+    n.forward += m * Math.cos(a);
+    n.rise -= m * Math.sin(a);
+  }
+  root.DioramaRender = { Renderer, THEMES, CAMERA_NUMBERS, defaultCamera, readCamera, moveForward, zoomView, previewScene, CAMERA_VIEWS: VIEWS, CAMERA_BACK: BACK };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

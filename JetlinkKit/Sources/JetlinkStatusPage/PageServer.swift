@@ -71,6 +71,8 @@
     private var controller: ServerController?
     /// Diorama's stage, when the server runs it: `/diorama/` draws the drive from its messages.
     private let diorama: DioramaStage?
+    /// The page's diorama-camera.json, read on each request: `python -m diorama camera` writes it.
+    private let dioramaCamera: URL?
 
     /// The page on every address at `port` (0: any free port), fed by
     /// `controller`, signed in with `auth`'s file and changing `system`.
@@ -78,10 +80,11 @@
     /// why it cannot listen.
     public static func start(
       port: Int, controller: ServerController, version: String, hardware: (any PageHardwareSource)?, auth: WebAuth? = nil,
-      system: (any PageSystem)? = nil, diorama: DioramaStage? = nil
+      system: (any PageSystem)? = nil, diorama: DioramaStage? = nil, dioramaCamera: URL? = nil
     ) throws -> PageServer {
       let server = try PageServer(
-        port: port, page: StatusPage.page(), feed: PageFeed(hardware: hardware), auth: auth, system: system, diorama: diorama
+        port: port, page: StatusPage.page(), feed: PageFeed(hardware: hardware), auth: auth, system: system, diorama: diorama,
+        dioramaCamera: dioramaCamera
       ) {
         LogRing.shared.lines()
       }
@@ -91,7 +94,7 @@
 
     init(
       port: Int, page: Data, feed: PageFeed, auth: WebAuth? = nil, system: (any PageSystem)? = nil, diorama: DioramaStage? = nil,
-      headerTimeout: TimeInterval = 30, keepalive: TimeInterval = 15, logs: @escaping @Sendable () -> [String]
+      dioramaCamera: URL? = nil, headerTimeout: TimeInterval = 30, keepalive: TimeInterval = 15, logs: @escaping @Sendable () -> [String]
     ) throws {
       guard let port = UInt16(exactly: port) else { throw HostError.invalid("\(port) is not a port") }
       // IPv6 with IPv4 mapped in, since a phone may resolve the Jetson's name
@@ -108,6 +111,7 @@
       self.auth = auth
       self.system = system
       self.diorama = diorama
+      self.dioramaCamera = dioramaCamera
       threads = 1
       PageThread.start("jetlink-page") { [self] in acceptLoop() }
     }
@@ -237,6 +241,11 @@
         return nil
       case ("GET", let path) where path.hasPrefix("/diorama/"):
         let name = path == "/diorama/" ? "diorama.html" : String(path.dropFirst("/diorama/".count))
+        if name == "diorama-camera.json" {
+          // none: the page draws with its own camera
+          guard let url = dioramaCamera, let data = try? Data(contentsOf: url) else { return PageResponse.text(404, "not found\n") }
+          return PageResponse.whole(200, type: "application/json", body: data, cache: "no-store")
+        }
         guard let file = DioramaPage.file(name) else { return PageResponse.text(404, "not found\n") }
         return PageResponse.whole(200, type: file.type, body: file.data)
       case ("GET", "/logs"):

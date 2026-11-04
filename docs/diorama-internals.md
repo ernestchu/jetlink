@@ -84,6 +84,68 @@ only after 3 s without one and above 18 mph. Either view stays for 3 s at
 least, so it never flickers between the two. `VIEW` in diorama-engine.js holds
 the numbers.
 
+**The camera.** Each view's camera is five numbers (`VIEWS` and `placed` in
+diorama-render.js), three of them set by hand:
+
+- **Zoom:** the focal length over the image width.
+- **Pitch:** the degrees the camera sits above the ego car, seen from the
+  middle of the car on the road.
+- **Forward** and **rise:** the metres the eye is moved along the default
+  view's forward and up. The setup page shows only forward; a drag moves both
+  (`moveForward`), so the camera slides along the road, level with it, at any
+  pitch, 0.005 of the default eye's distance from the car a pixel (20.7 m in
+  the road view, 72.2 m in bird's-eye).
+- **Shift:** how far down the picture is moved, in image widths. Only zoom
+  changes it.
+
+There are no limits; only zoom has to stay above zero. Pitch past 90° takes the
+camera over the car to look back down at it, and below 0° under the road.
+
+The default views are the first cameras (an eye and the point on the road it
+looked at, zoom 0.62 and 0.69) moved 2.2 times as far from the car along the
+line to it, looking the same way, with 2.2 times their zoom: the road view 1.36
+and 19.9°, bird's-eye 1.52 and 66.2°, forward and rise 0. The car is the same
+size and in the same place, but seen from further off, so the perspective
+stretches it less near the edge of the picture.
+
+Pitch turns the whole camera, moved eye and all, about the car's middle, so the
+car stays on its pixel. Zoom (`zoomView`) scales the picture about the car by
+moving the picture, the stored shift, so the car stays on its pixel too; the
+defaults are the first zooms zoomed this way, so the car sits where the first
+cameras drew it. Since only zoom changes the shift, moving forward moves the
+camera and nothing else, and the horizon stays put. Between the two views the
+car goes straight from where one view draws it to where the other does (unless
+a camera has moved past it: then the shift is blended).
+
+The camera is set over a still scene of its own (`previewScene`), never a
+drive or its footage: the ego car, the model's lead 10 m ahead, the planned path
+straight and stopping 2 m short of it (3 m on a drive), the ego lane's two
+lines at ±1.8 m and the road edges at ±5.6 m, with no road map, stripes or
+segmentation lead. The apps draw the same scene, from a state of their own.
+
+A diorama-camera.json beside the page (`python -m diorama camera` writes it,
+the viewer and `--diorama-camera` serve it) sets any of the ten numbers. The
+page checks it with `readCamera` and draws with its own camera, saying why
+under the timings, if it is wrong. `diorama/camera.py` checks one the same way
+before the viewer saves it, and `view` refuses a wrong one.
+
+The apps place their camera the same way in `DioramaRenderer.swift`
+(`DioramaCamera`), from the same eye and look-at points, with their own
+copy of the defaults. Each app keeps its ten numbers in its own
+UserDefaults (`dioramaCamera`), never in diorama-camera.json, and
+**Set Up Camera…** holds one view whatever the view chooser says, as the
+setup page does. `JetlinkDioramaUITests` checks that the defaults are the
+first cameras further back, that pitch and zoom keep the car on its pixel
+wherever forward moved the camera, and that forward moves the camera along the
+road alone. On a Mac, **Set Up Camera…** opens its own **Diorama Camera**
+window, and a trackpad's two fingers are told from a mouse's
+wheel by the scroll's gesture phase.
+
+In the browser, a trackpad's pinch comes as a wheel event with ctrl held, and
+its two fingers as a wheel event. The setup page tells a mouse's wheel from
+them by its notches: lines, or whole 120ths of `wheelDelta`, straight up or
+down.
+
 **The comma comes first:**
 
 - The server hands Diorama the frame only after the reply has gone to the comma.

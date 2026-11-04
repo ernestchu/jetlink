@@ -76,6 +76,11 @@
         "Diorama's segmentations run at once, each on an engine of its own: 2 keeps a GPU busy that idles between runs, as a Mac's does, at twice the memory.",
         valueName: "n"))
     var dioramaInFlight = 1
+    @Option(
+      help: ArgumentHelp(
+        "Diorama: the camera file `python -m diorama camera` saved, which the page draws its views with; read again as each page opens.",
+        valueName: "file"))
+    var dioramaCamera: String?
     @Option(help: "debug, info, warning or error.")
     var logLevel = Log.Level.info
 
@@ -235,7 +240,7 @@
       do {
         let page = try PageServer.start(
           port: statusPort, controller: controller, version: productVersion(), hardware: hardware, auth: auth, system: system,
-          diorama: diorama)
+          diorama: diorama, dioramaCamera: dioramaCamera.map { URL(fileURLWithPath: $0) })
         let signIn = auth == nil ? "read-only" : auth!.isConfigured ? "with sign-in" : "read-only until \(auth!.url.path) is written"
         log.info("web page on port \(page.port), \(signIn)")
         return page

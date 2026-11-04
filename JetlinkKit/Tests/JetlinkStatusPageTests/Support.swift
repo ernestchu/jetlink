@@ -108,13 +108,13 @@ final class CountingRegistry: ModelRegistry, @unchecked Sendable {
     let server: PageServer
 
     init(
-      auth: WebAuth? = nil, system: (any PageSystem)? = nil, headerTimeout: TimeInterval = 30, keepalive: TimeInterval = 15,
-      logs: @escaping @Sendable () -> [String] = { [] }
+      auth: WebAuth? = nil, system: (any PageSystem)? = nil, dioramaCamera: URL? = nil, headerTimeout: TimeInterval = 30,
+      keepalive: TimeInterval = 15, logs: @escaping @Sendable () -> [String] = { [] }
     ) throws {
       feed = PageFeed(hardware: nil)
       server = try PageServer(
-        port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, auth: auth, system: system, headerTimeout: headerTimeout,
-        keepalive: keepalive, logs: logs)
+        port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, auth: auth, system: system, dioramaCamera: dioramaCamera,
+        headerTimeout: headerTimeout, keepalive: keepalive, logs: logs)
     }
 
     var port: UInt16 { server.port }

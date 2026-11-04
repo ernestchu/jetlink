@@ -312,3 +312,232 @@ def test_view_cues():
   assert out == {'stopped': 'stopped', 'cruise': '', 'turn': 'turn', 'ramp': '', 'rampSlowing': 'turn', 'turnFast': '',
                  'crossing': 'crossing', 'crossingStopping': 'crossing', 'crossingOver': '', 'crossingFar': '',
                  'traffic': 'traffic', 'slow': 'slow'}
+
+
+RENDER = ENGINE.with_name('diorama-render.js')
+
+
+def renderer(script: str) -> dict:
+  """The page renderer's camera, run by `script` under node with R its exports, which prints JSON."""
+  head = f'require({json.dumps(str(ENGINE))}); require({json.dumps(str(RENDER))}); const R = globalThis.DioramaRender;\n'
+  return json.loads(subprocess.run(['node', '-e', head + script], capture_output=True, text=True, check=True).stdout)
+
+
+def test_a_camera_file_is_any_views_numbers_with_no_limits_but_a_zoom_above_0():
+  from diorama import camera
+  assert camera.check({}) == {}
+  wild = {'road': {'zoom': 40, 'pitch': 170, 'forward': -500, 'rise': 300, 'shift': 12}, 'bird': {'zoom': 0.01, 'pitch': -15}}
+  assert camera.check(wild) == wild
+  for bad, why in [
+    ([], 'not a JSON object'),
+    ({'side': {}}, '"side" is not a view'),
+    ({'road': 1}, 'road is not an object'),
+    ({'road': {'tilt': 1}}, 'road.tilt is not a camera number'),
+    ({'road': {'zoom': 0}}, 'road.zoom is 0, not above 0'),
+    ({'road': {'zoom': -1}}, 'road.zoom is -1, not above 0'),
+    ({'bird': {'forward': '5'}}, 'bird.forward is "5", not a number'),
+    ({'bird': {'shift': float('inf')}}, 'bird.shift is Infinity'),
+    ({'bird': {'pitch': True}}, 'bird.pitch is true'),
+    ({'bird': {'pitch': float('nan')}}, 'bird.pitch is NaN'),
+  ]:
+    with pytest.raises(ValueError, match=why):
+      camera.check(bad)
+
+
+def test_the_camera_file_saves_whole_and_loads_back(tmp_path, monkeypatch):
+  from diorama import camera
+  monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+  path = camera.default_path()
+  assert path == tmp_path / 'jetlink' / 'diorama-camera.json'
+  assert camera.load(path) is None
+  camera.save(path, {'road': {'zoom': 0.7, 'pitch': 25, 'forward': 3}})
+  assert camera.load(path) == {'road': {'zoom': 0.7, 'pitch': 25, 'forward': 3}}
+  with pytest.raises(ValueError, match='road.zoom'):
+    camera.save(path, {'road': {'zoom': 0}})
+  assert camera.load(path)['road']['zoom'] == 0.7  # a bad camera leaves the saved one be
+  path.write_text('{"road": ')
+  with pytest.raises(ValueError, match=str(path)):
+    camera.load(path)
+
+
+def test_the_viewer_saves_the_setup_pages_camera_and_serves_it(tmp_path):
+  import functools
+  import http.server
+  import threading
+  import urllib.error
+  import urllib.request
+
+  from diorama.viewer import Handler
+
+  file = tmp_path / 'cam' / 'diorama-camera.json'
+
+  def server(setup: bool) -> str:
+    s = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Handler, drive=tmp_path, camera=file, setup=setup))
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    servers.append(s)
+    return f'http://127.0.0.1:{s.server_address[1]}/diorama-camera.json'
+
+  def post(url: str, body: bytes, kind: str = 'application/json') -> tuple[int, str]:
+    try:
+      with urllib.request.urlopen(urllib.request.Request(url, body, {'Content-Type': kind})) as r:
+        return r.status, r.read().decode().strip()
+    except urllib.error.HTTPError as e:
+      return e.code, e.read().decode().strip()
+
+  servers = []
+  try:
+    setup, view = server(True), server(False)
+    with pytest.raises(urllib.error.HTTPError, match='404'):
+      urllib.request.urlopen(view)
+    no_redirect = urllib.request.build_opener(type('NoRedirect', (urllib.request.HTTPRedirectHandler,), {'redirect_request': lambda *a: None}))
+    with pytest.raises(urllib.error.HTTPError) as found:
+      no_redirect.open(setup.replace('diorama-camera.json', ''))
+    assert found.value.headers['Location'] == '/diorama.html?camera=setup'  # no drive, no footage
+    assert post(setup, b'{"road": {"zoom": 0.8}}', 'text/plain')[0] == 415  # what a form elsewhere could send
+    assert post(setup, b'{"road": {"zoom": -8}}') == (400, 'road.zoom is -8, not above 0')
+    assert post(setup, b'{"road": ')[0] == 400
+    assert not file.exists()
+    assert post(view, b'{"road": {"zoom": 0.8}}')[0] == 404  # only the setup page saves
+    assert post(setup, b'{"road": {"zoom": 0.8}}') == (200, str(file))
+    with urllib.request.urlopen(view) as r:
+      assert json.loads(r.read()) == {'road': {'zoom': 0.8}}
+  finally:
+    for s in servers:
+      s.shutdown()
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_the_renderer_reads_a_camera_file_as_the_viewer_checks_it():
+  from diorama import camera
+  got = renderer("""
+    const out = { numbers: R.CAMERA_NUMBERS, over: R.readCamera({ bird: { pitch: 50 } }), base: R.defaultCamera(), bad: [] };
+    out.wild = R.readCamera({ road: { zoom: 40, pitch: 170, forward: -500 } }).road;
+    for (const f of [[], { side: {} }, { road: { tilt: 1 } }, { road: { zoom: 0 } }, { road: { zoom: -1 } }, { bird: { forward: '5' } }]) {
+      try { R.readCamera(f); out.bad.push(null); } catch (e) { out.bad.push(e.message); }
+    }
+    console.log(JSON.stringify(out));
+  """)
+  assert tuple(got['numbers']) == camera.NUMBERS
+  assert got['wild']['zoom'] == 40 and got['wild']['pitch'] == 170 and got['wild']['forward'] == -500  # no limits
+  assert set(got['over']) == set(camera.VIEWS)
+  assert got['over'] == {**got['base'], 'bird': {**got['base']['bird'], 'pitch': 50}}  # over the defaults
+  assert all(got['bad'])
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_pitch_and_zoom_keep_the_ego_car_where_it_is_wherever_forward_moved_the_camera():
+  got = renderer("""
+    const px = (n, s) => {  // where the ego car's middle on the road lands, or null behind the camera
+      const c = R.Renderer.prototype.camera.call({ views: n }, s, 1.22, 1280, 720), v = [-0.75 - c.C[0], -c.C[1], 1.22 - c.C[2]];
+      const d = [0, 1, 2].map((i) => c.M[3 * i] * v[0] + c.M[3 * i + 1] * v[1] + c.M[3 * i + 2] * v[2]);
+      return d[0] > 0.5 ? [c.cx + c.f * d[1] / d[0], c.cy + c.f * d[2] / d[0]] : null;
+    };
+    const copy = (n) => JSON.parse(JSON.stringify(n)), out = { pitch: [], zoom: [] };
+    for (const [view, s] of [['road', 0], ['road', 0.4], ['bird', 1]]) for (const moved of [0, 30, -60]) {  // pixels of the gesture
+      const base = R.defaultCamera();
+      R.moveForward(base, view, moved);
+      for (const pitch of [-15, 0, 5, 45, 70, 89, 120, 170]) {
+        const pitched = copy(base);
+        pitched[view].pitch = pitch;
+        if (s === 0 || s === 1) out.pitch.push({ at: px(base, s), now: px(pitched, s) });  // within a view; the pan draws the car its own way
+        for (const ratio of [0.3, 0.8, 1.5, 2.5]) {
+          const zoomed = copy(pitched);
+          R.zoomView(zoomed, view, ratio);
+          out.zoom.push({ at: px(pitched, s), now: px(zoomed, s) });
+        }
+      }
+    }
+    console.log(JSON.stringify(out));
+  """)
+  for kind, cases in got.items():
+    kept = [v for v in cases if v['at'] and v['now']]
+    assert len(kept) > len(cases) / 2, kind
+    for v in kept:
+      assert v['now'] == pytest.approx(v['at'], abs=1e-6), kind
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_forward_slides_the_camera_along_the_road_level_at_any_pitch():
+  got = renderer("""
+    const out = [];
+    for (const view of ['road', 'bird']) for (const pitch of [5, 30, 60, 85]) {
+      const n = R.defaultCamera(), s = view === 'road' ? 0 : 1, cam = (n) => R.Renderer.prototype.camera.call({ views: n }, s, 1.22, 1280, 720);
+      n[view].pitch = pitch;
+      const before = cam(n);
+      R.moveForward(n, view, 40);
+      const after = cam(n);
+      out.push({ C: [before.C, after.C], M: [[...before.M], [...after.M]], picture: [[before.f, before.cx, before.cy], [after.f, after.cx, after.cy]] });
+    }
+    console.log(JSON.stringify(out));
+  """)
+  for v in got:
+    (b, a), (bm, am) = v['C'], v['M']
+    assert a[0] > b[0] and a[1:] == pytest.approx(b[1:])  # forward, keeping its height
+    assert am == pytest.approx(bm)  # and its aim
+    assert v['picture'][0] == v['picture'][1]  # and the picture is not moved: nothing but the camera moves
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_the_camera_is_set_over_a_still_scene_of_its_own():
+  got = renderer("""
+    const { state, engine } = R.previewScene(), E = globalThis.DioramaEngine;
+    const shown = [0, 1, 2, 3].filter((i) => state.out.lane_lines_prob[2 * i + 1] > 0.15);
+    const ys = shown.map((i) => [...new Set(E.X_IDXS.map((_, j) => E.lane(state.out.lane_lines, i, j, 0)))]);
+    console.log(JSON.stringify({ lead: state.lead, gap: state.pathGap, front: E.EGO_FRONT, stripes: state.stripes.length, map: engine.roadmap, ys }));
+  """)
+  assert got['lead']['x'] == pytest.approx(got['front'] + 10) and not got['lead']['seg']  # the model's lead, 10 m ahead
+  assert got['lead']['x'] - got['gap'] == pytest.approx(got['front'] + 8)  # the path stops 2 m short of it
+  assert got['stripes'] == 0 and got['map'] is None  # nothing from the segmentation
+  assert got['ys'] == [[-1.8], [1.8]]  # the ego lane's two lines, straight
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_the_default_cameras_are_the_first_ones_further_back_with_a_longer_lens():
+  got = renderer("""
+    const k = R.CAMERA_BACK, P = [(globalThis.DioramaEngine.EGO_FRONT + globalThis.DioramaEngine.EGO_REAR) / 2, 0, 1.22];
+    // the first cameras: the defaults with the eye moved back to the first one, at the first zoom
+    const first = R.defaultCamera();
+    for (const [name, v] of Object.entries(R.CAMERA_VIEWS)) {
+      first[name].forward = v.first.eye[0] - v.eye[0];
+      first[name].rise = v.first.eye[1] - v.eye[1];
+      first[name].zoom = v.first.zoom;
+      first[name].shift = 0;
+    }
+    const cam = (n, s) => R.Renderer.prototype.camera.call({ views: n }, s, 1.22, 1280, 720);
+    const px = (c) => {  // where the ego car's middle on the road lands
+      const v = P.map((p, i) => p - c.C[i]), d = [0, 1, 2].map((i) => c.M[3 * i] * v[0] + c.M[3 * i + 1] * v[1] + c.M[3 * i + 2] * v[2]);
+      return [c.cx + c.f * d[1] / d[0], c.cy + c.f * d[2] / d[0]];
+    };
+    const out = [];
+    for (const s of [0, 0.3, 0.7, 1]) {
+      const a = cam(first, s), b = cam(R.defaultCamera(), s);
+      out.push({ s, M: [[...a.M], [...b.M]], C: [a.C.map((v, i) => P[i] + k * (v - P[i])), b.C], f: [k * a.f, b.f], px: [px(a), px(b)] });
+    }
+    console.log(JSON.stringify({ k, out }));
+  """)
+  assert got['k'] > 1
+  for v in got['out']:
+    # further back, looking the same way, and in each view the car as big and where it was (the pan draws it its own way)
+    for kind in ('M', 'C', 'f') + (('px',) if v['s'] in (0, 1) else ()):
+      assert v[kind][1] == pytest.approx(v[kind][0], abs=1e-9), kind
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_between_the_views_the_car_goes_straight_from_one_to_the_other():
+  got = renderer("""
+    const E = globalThis.DioramaEngine, P = [(E.EGO_FRONT + E.EGO_REAR) / 2, 0, 1.22], out = [];
+    const px = (n, s) => {
+      const c = R.Renderer.prototype.camera.call({ views: n }, s, 1.22, 1280, 720), v = P.map((p, i) => p - c.C[i]);
+      const d = [0, 1, 2].map((i) => c.M[3 * i] * v[0] + c.M[3 * i + 1] * v[1] + c.M[3 * i + 2] * v[2]);
+      return [c.cx + c.f * d[1] / d[0], c.cy + c.f * d[2] / d[0]];
+    };
+    const set = R.defaultCamera();
+    set.road.pitch = 30; R.zoomView(set, 'road', 0.7); R.moveForward(set, 'road', -40);
+    set.bird.pitch = 50; R.zoomView(set, 'bird', 1.4); R.moveForward(set, 'bird', 10);
+    for (const n of [R.defaultCamera(), set]) for (const s of [0.1, 0.3, 0.5, 0.7, 0.9]) out.push({ s, a: px(n, 0), b: px(n, 1), at: px(n, s) });
+    console.log(JSON.stringify(out));
+  """)
+  for v in got:
+    a, b, at, s = v['a'], v['b'], v['at'], v['s']
+    assert at == pytest.approx([a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s], abs=1e-6)
+    assert 0 <= at[0] <= 1280 and 0 <= at[1] <= 720  # in the picture all the way

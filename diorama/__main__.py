@@ -7,12 +7,14 @@ See the LICENSE file in the root directory for more details.
     python -m diorama export --out ~/diorama-models
     python -m diorama run /data/media/0/realdata/<route>--* --model big.onnx --models ~/diorama-models --out drive/
     python -m diorama view drive/
+    python -m diorama camera   # set the page's camera in the browser
     python -m diorama replay /data/media/0/realdata/<route>--* --model big.onnx --host 127.0.0.1   # into a live server
     python -m diorama assets model.obj   # rebuild the page's car from its model (diorama/assets.py)
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -52,6 +54,14 @@ def main(argv: list[str] | None = None) -> int:
   v.add_argument('drive', type=Path)
   v.add_argument('--port', type=int, default=8642)
   v.add_argument('--no-browser', action='store_true')
+  v.add_argument('--camera', type=Path, help='the camera file `camera` saved (default: ~/.config/jetlink/diorama-camera.json)')
+
+  c = sub.add_parser('camera', help="set the page's camera in the browser, over a still scene of its own, and save it to a file")
+  c.add_argument('--file', type=Path, help='where it is saved (default: ~/.config/jetlink/diorama-camera.json)')
+  c.add_argument('--port', type=int, default=8642)
+  c.add_argument('--no-browser', action='store_true')
+  c.add_argument('--show', action='store_true', help='print the saved camera, and stop')
+  c.add_argument('--reset', action='store_true', help="delete the file: the page's own camera again")
 
   a = sub.add_parser('assets', help="rebuild the page's car, diorama-assets.bin, from its model's OBJ (needs scipy)")
   a.add_argument('obj', type=Path, help='the OBJ of the model diorama/assets.py names')
@@ -72,9 +82,25 @@ def main(argv: list[str] | None = None) -> int:
     from diorama.assets import RESOURCES, write_library
     out = args.out or RESOURCES / 'diorama-assets.bin'
     print(f'wrote {out}, {write_library(args.obj, out)} bytes')
-  else:
+  elif args.cmd == 'camera':
+    from diorama import camera
     from diorama.viewer import serve
-    serve(args.drive, args.port, open_browser=not args.no_browser)
+    path = args.file or camera.default_path()
+    if args.show:
+      try:
+        found = camera.load(path)
+      except ValueError as e:
+        raise SystemExit(f'{e}') from None
+      print(f'{path}:\n' + json.dumps(found, indent=2) if found is not None else f"no {path}: the page's own camera")
+    elif args.reset:
+      path.unlink(missing_ok=True)
+      print(f"removed {path}: the page's own camera")
+    else:
+      serve(None, args.port, open_browser=not args.no_browser, camera=path, setup=True)
+  else:
+    from diorama import camera
+    from diorama.viewer import serve
+    serve(args.drive, args.port, open_browser=not args.no_browser, camera=args.camera or camera.default_path())
   return 0
 
 

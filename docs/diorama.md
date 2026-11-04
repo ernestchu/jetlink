@@ -27,7 +27,8 @@ version). It runs on the GPU only while someone watches, and steps aside
 whenever the driving model needs the GPU.
 
 **Contents:** [Linux](#linux) · [Mac](#mac) · [iPhone](#iphone) ·
-[A recorded drive](#a-recorded-drive) · [Options](#options) ·
+[A recorded drive](#a-recorded-drive) · [Set the camera](#set-the-camera) ·
+[Options](#options) ·
 [Known limits](#known-limits) · [Credits](#credits)
 
 ## Linux
@@ -168,6 +169,27 @@ below use it where it was built.
 
 **Stop:** quit Jetlink. **Restart Server**, in **Settings**, restarts it.
 
+### The camera
+
+**Settings > General > Diorama > Set Up Camera…** opens the **Diorama Camera**
+window. It sets one view at a time: pick **Road view** or **Bird's-eye** at the
+top.
+
+The camera is set over a scene of its own, the same whether or not a comma is
+connected or a drive plays: the ego car, a lead 10 m ahead, the planned path
+stopping 2 m short of it, and the ego lane's two lines. Nothing from the
+segmentation.
+
+- **Zoom:** pinch on the trackpad, or turn the mouse wheel.
+- **Pitch,** the camera up and down over the car: click and drag, down to see
+  it from higher.
+- **Forward,** the camera along the road: two fingers on the trackpad, or drag
+  with the right button. Down moves it forward, up back.
+
+**Reset View** brings back the view's own camera. **Save** keeps it for every
+Diorama view the Mac draws, and **Cancel** drops it. The Mac keeps a camera of
+its own, apart from the [web page's](#set-the-camera).
+
 ### Feed the app a replay
 
 The app serves the comma over USB. To play a recorded drive into it instead,
@@ -233,6 +255,20 @@ The iPhone app's **Diorama** tab can show the drive two ways, picked at its top:
 
 The screen stays on while the tab shows the drive.
 
+### The camera
+
+**Settings > Diorama > Set Up Camera…** sets the camera as on a
+[Mac](#the-camera), over the same scene of its own, whether or not the tab
+shows a drive.
+
+- **Zoom:** pinch.
+- **Pitch:** drag with one finger.
+- **Forward:** drag with two fingers, down to move forward.
+
+On an iPad with a trackpad or mouse, two fingers scrolling and a drag with the
+right button move it forward and back, and a mouse wheel zooms. An iPhone watching a Mac
+draws with its own camera, not the Mac's.
+
 ## A recorded drive
 
 To look at a drive beside its own footage, on any computer and without a
@@ -261,6 +297,41 @@ uvx --from huggingface_hub hf download ernestchu/jetlink-diorama \
   --include diorama_seg.onnx --include diorama.json --local-dir ~/diorama-models
 ```
 
+## Set the camera
+
+Each view, the road view and bird's-eye, has a camera you can set in the
+browser, saved to a file. From the checkout, set up as for [Linux](#set-up):
+
+```bash
+.venv/bin/python -m diorama camera
+```
+
+The page opens with a panel for the camera. Pick **Road view** or
+**Bird's-eye**, and the page holds that view while you set it. It draws a
+scene of its own, with no drive or footage needed: the ego car, a lead 10 m
+ahead, the planned path stopping 2 m short of it, and the ego lane's two lines.
+Nothing from the segmentation.
+
+| | Trackpad | Touchscreen | Mouse |
+| --- | --- | --- | --- |
+| **Zoom** | Pinch | Pinch | Wheel |
+| **Pitch,** the car tilting toward you | Click and drag | Drag | Drag with the left button |
+| **Forward,** the camera along the road | Two fingers | Two fingers | Drag with the right button |
+
+- Drag down to see the car from higher. Pitch turns the camera about the car,
+  and zoom scales the picture about it, so neither moves the car on screen.
+- Two fingers or the right button down move the camera forward, up back, as
+  if pulling the road under it: level with the road, at any pitch.
+- **Reset view** brings back the view's own camera. **Save** writes both views
+  to `~/.config/jetlink/diorama-camera.json` (`--file` for another).
+- `view` draws with the saved camera. `camera --show` prints it, and
+  `camera --reset` deletes it.
+- **The live page** uses it when the server starts with
+  `--diorama-camera ~/.config/jetlink/diorama-camera.json`. Reopen the page
+  after a save.
+- The file is the web page's. The Mac and iPhone apps keep their own camera,
+  set in their settings ([Mac](#the-camera), [iPhone](#the-camera-1)).
+
 ## Options
 
 | Option | What it does |
@@ -269,7 +340,8 @@ uvx --from huggingface_hub hf download ernestchu/jetlink-diorama \
 | `--diorama-every-frame` | Runs the model on every frame (20 Hz) instead of every other frame, for about twice the GPU time. An RTX 4090 does it easily. |
 | `--diorama-in-flight N` | Runs N at once; only for a GPU too slow to keep up with every frame alone. |
 | `--diorama-pause-ms MS` | Pauses Diorama for 3 s after a driving frame slower than this (40 by default). |
-| Mac: **Settings > General > Diorama** | The model's folder, **Segment every frame (20 Hz)**, and **Show on iPhones nearby**. |
+| `--diorama-camera FILE` | Draws the page with the camera `python -m diorama camera` saved ([above](#set-the-camera)). |
+| Mac: **Settings > General > Diorama** | The model's folder, **Segment every frame (20 Hz)**, **Show on iPhones nearby**, and **Set Up Camera…**. |
 
 ## Known limits
 
@@ -281,6 +353,9 @@ uvx --from huggingface_hub hf download ernestchu/jetlink-diorama \
 - **Around a switch of view,** a segmentation from the other camera may be
   dropped, a tenth of a second without new detail.
 - All lane lines are white.
+- **Setting the camera in a browser,** a mouse whose wheel scrolls smoothly,
+  with no notches, moves the camera forward instead of zooming. Pinch
+  instead.
 
 ## Credits
 
