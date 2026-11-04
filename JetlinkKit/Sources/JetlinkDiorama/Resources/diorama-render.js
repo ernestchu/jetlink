@@ -373,6 +373,7 @@ void main() {
       const w = Math.round(canvas.clientWidth * dpr) || canvas.width, h = Math.round(canvas.clientHeight * dpr) || canvas.height;
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
       const hgt = engine.cam ? engine.cam.height : 1.22;
+      this.hgt = hgt;
 
       // the model's road and lane lines into the ego-frame mask
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.maskFbo);
@@ -611,12 +612,26 @@ void main() {
     return { state, engine: { cam: null, roadmap: null } };
   }
 
-  // `view`'s camera moved m metres along the road, level, whatever its pitch: forward and rise in the turned frame.
-  // A drag moves it 0.005 of the default eye's distance from the car a pixel.
-  function moveForward(cam, view, pixels) {
-    const v = VIEWS[view], n = cam[view], m = pixels * 0.005 * v.r, a = turn(v, n);
+  // `view`'s camera moved m metres along the road, level, whatever its pitch: forward and rise in the turned frame
+  function moveForwardBy(cam, view, m) {
+    const n = cam[view], a = turn(VIEWS[view], n);
     n.forward += m * Math.cos(a);
     n.rise -= m * Math.sin(a);
   }
-  root.DioramaRender = { Renderer, THEMES, CAMERA_NUMBERS, defaultCamera, readCamera, moveForward, zoomView, previewScene, CAMERA_VIEWS: VIEWS, CAMERA_BACK: BACK };
+  // a drag of `pixels`: 0.005 of the default eye's distance from the car a pixel
+  const moveForward = (cam, view, pixels) => moveForwardBy(cam, view, pixels * 0.005 * VIEWS[view].r);
+  // the metres forward that carry the road under (x, y) of the picture `c` (Renderer.camera, the road `hgt` below)
+  // dy further down it, as a touch drag pulls the road along under the fingers; null where there is no road there
+  // to follow (above the horizon, or past 400 m)
+  function forwardFollowing(c, hgt, x, y, dy) {
+    const a = (x - c.cx) / c.f, b = (y - c.cy) / c.f, M = c.M;
+    const dir = [M[0] + a * M[3] + b * M[6], M[1] + a * M[4] + b * M[7], M[2] + a * M[5] + b * M[8]];  // M^T [1, a, b]
+    if (!(dir[2] > 1e-9)) return null;
+    const t = (hgt - c.C[2]) / dir[2];
+    if (!(t > 0) || t * Math.hypot(...dir) > 400) return null;
+    // the road point at q = t [1, a, b] in the camera; moving m along road x takes it to q - m R x
+    const r = [M[0], M[3], M[6]], rate = c.f * (t * b * r[0] - r[2] * t) / (t * t);  // d(row)/dm
+    return Math.abs(rate) > 1e-6 ? dy / rate : null;
+  }
+  root.DioramaRender = { Renderer, THEMES, CAMERA_NUMBERS, defaultCamera, readCamera, moveForward, moveForwardBy, forwardFollowing, zoomView, previewScene, CAMERA_VIEWS: VIEWS, CAMERA_BACK: BACK };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

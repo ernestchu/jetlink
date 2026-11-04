@@ -541,3 +541,35 @@ def test_between_the_views_the_car_goes_straight_from_one_to_the_other():
     a, b, at, s = v['a'], v['b'], v['at'], v['s']
     assert at == pytest.approx([a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s], abs=1e-6)
     assert 0 <= at[0] <= 1280 and 0 <= at[1] <= 720  # in the picture all the way
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_a_touch_drag_pulls_the_road_along_under_the_fingers():
+  got = renderer("""
+    const hgt = 1.22, w = 1280, h = 720, out = [];
+    const row = (n, s, G) => {  // where road point G lands
+      const c = R.Renderer.prototype.camera.call({ views: n }, s, hgt, w, h), v = G.map((g, i) => g - c.C[i]);
+      const d = [0, 1, 2].map((i) => c.M[3 * i] * v[0] + c.M[3 * i + 1] * v[1] + c.M[3 * i + 2] * v[2]);
+      return c.cy + c.f * d[2] / d[0];
+    };
+    for (const [view, s] of [['road', 0], ['bird', 1]]) for (const pitch of [10, 40, 75]) for (const fwd of [-20, 0, 15])
+      for (const [x, y] of [[640, 650], [300, 600], [900, 500]]) for (const dy of [-3, 3]) {
+        const n = R.defaultCamera();
+        n[view].pitch = pitch;
+        R.moveForwardBy(n, view, fwd);
+        const c = R.Renderer.prototype.camera.call({ views: n }, s, hgt, w, h);
+        const m = R.forwardFollowing(c, hgt, x, y, dy);
+        if (m === null) { out.push(null); continue; }
+        // the road point under (x, y): the ray through it to the road
+        const a = (x - c.cx) / c.f, b = (y - c.cy) / c.f, M = c.M;
+        const dir = [M[0] + a * M[3] + b * M[6], M[1] + a * M[4] + b * M[7], M[2] + a * M[5] + b * M[8]], t = (hgt - c.C[2]) / dir[2];
+        const G = c.C.map((v, i) => v + t * dir[i]);
+        R.moveForwardBy(n, view, m);
+        out.push({ want: y + dy, got: row(n, s, G) });
+      }
+    console.log(JSON.stringify(out));
+  """)
+  followed = [v for v in got if v]
+  assert len(followed) > len(got) / 2
+  for v in followed:
+    assert v['got'] == pytest.approx(v['want'], abs=0.05)

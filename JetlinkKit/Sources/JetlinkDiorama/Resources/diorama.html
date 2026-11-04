@@ -462,7 +462,13 @@
         const other = [...at].find(([id]) => id !== e.pointerId)[1];
         const before = Math.hypot(was[0] - other[0], was[1] - other[1]), after = Math.hypot(now[0] - other[0], now[1] - other[1]);
         if (before > 0) zoomBy(after / before);
-        forwardBy(dy / 2);  // the middle of the two
+        // the middle of the two, pulling the road along under the fingers where there is road there
+        const box = canvas.getBoundingClientRect(), dpr = devicePixelRatio || 1, hgt = renderer.hgt ?? 1.22;
+        const c = renderer.camera(renderer.fixedView, hgt, canvas.width, canvas.height);
+        const mid = [(was[0] + other[0]) / 2 - box.left, (was[1] + other[1]) / 2 - box.top];
+        const m = DioramaRender.forwardFollowing(c, hgt, mid[0] * dpr, mid[1] * dpr, dy / 2 * dpr);
+        if (m === null) forwardBy(dy / 2);
+        else { DioramaRender.moveForwardBy(renderer.views, view, m); show(); }
       } else if (e.pointerType === 'mouse' && e.buttons & 2) forwardBy(dy);
       else if (!pinched) pitchBy(dy);
     });
