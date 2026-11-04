@@ -91,10 +91,13 @@
       // goes m forward: it comes m nearer along the road's x, the camera's first column
       let q = Diorama.m3vec(cam.rotation, [t * ray[0], t * ray[1], t * ray[2]])
       let r = [cam.rotation[0], cam.rotation[3], cam.rotation[6]]
-      // its row is f·q₂/q₀ + cy; d(row)/dm with q(m) = q − m·r
-      let rate = cam.f * (q[2] * r[0] - r[2] * q[0]) / (q[0] * q[0])
-      guard abs(rate) > 1e-6 else { return nil }
-      return dy / rate
+      // its row is f·(q₂ − m·r₂)/(q₀ − m·r₀) + cy: solved for the m that puts it on y + dy
+      let target = (y + dy - cam.cy) / cam.f, under = r[2] - target * r[0]
+      guard abs(under) > 1e-9 else { return nil }
+      let m = (q[2] - target * q[0]) / under
+      // still in front of the camera, and a step a drag can make
+      guard q[0] - m * r[0] > 1e-3, m.isFinite else { return nil }
+      return m
     }
 
     /// Zooms a view about the ego car: the picture moves so the car keeps its pixel. No
@@ -363,6 +366,12 @@
     /// the picture scales about the ego car. Between them, the picture is moved so the
     /// car goes straight from where one view draws it to where the other does, and so
     /// stays in the picture all the way.
+    /// How far above the picture's bottom edge each view's principal point sits, in image
+    /// widths: the first cameras' 42% and 50% down a 16:9 picture. Measured from the bottom,
+    /// a picture of another shape keeps the car as far above its bottom edge, and more or
+    /// less height only shows more or less of what lies ahead at the top.
+    static let aboveBottom = (road: (1 - 0.42) * 9 / 16, bird: (1 - 0.5) * 9 / 16)
+
     static func camera(_ s: Double, _ hgt: Double, _ w: Double, _ h: Double, _ setup: DioramaCamera = .defaults) -> (
       f: Double, cx: Double, cy: Double, rotation: [Double], center: [Double]
     ) {
@@ -374,15 +383,17 @@
       let center = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s, a[2] + (b[2] - a[2]) * pow(s, 0.7)]
       let lerp = { (r: Double, b: Double) in r * (1 - s) + b * s }
       let f = lerp(setup.road.zoom, setup.bird.zoom) * w
-      var cy = lerp(0.42, 0.5) * h + lerp(setup.road.shift, setup.bird.shift) * w
+      // each view's principal point, from the bottom edge, and moved by its zoom's shift
+      let roadCy = h - aboveBottom.road * w + setup.road.shift * w, birdCy = h - aboveBottom.bird * w + setup.bird.shift * w
+      var cy = lerp(roadCy, birdCy)
       // how far below the axis the car is, as a slope, seen from a camera; nil when behind it
       func slope(_ r: [Double], _ c: [Double]) -> Double? {
         let car = Diorama.m3vec(r, [pivotX - c[0], -c[1], hgt - c[2]])
         return car[0] > 1e-6 ? car[2] / car[0] : nil
       }
       if s > 0, s < 1, let d = slope(rotation, center), let dr = slope(chase.rotation, chase.center), let db = slope(bird.rotation, bird.center) {
-        let road = setup.road.zoom * w * dr + 0.42 * h + setup.road.shift * w
-        let birdY = setup.bird.zoom * w * db + 0.5 * h + setup.bird.shift * w
+        let road = setup.road.zoom * w * dr + roadCy
+        let birdY = setup.bird.zoom * w * db + birdCy
         cy = lerp(road, birdY) - f * d
       }
       return (f, w / 2, cy, rotation, center)

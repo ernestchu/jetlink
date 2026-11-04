@@ -177,7 +177,7 @@
             v.pitch = pitch
             DioramaCamera.moveForward(&v, start, view: view)
             for (x, y) in [(201.0, 600.0), (120, 450), (300, 520)] {
-              for dy in [3.0, -3] {
+              for dy in [3.0, -3, 40, -40] {
                 var setup = DioramaCamera.defaults
                 setup[view] = v
                 let cam = DioramaRenderer.camera(Double(view), hgt, w, h, setup)
@@ -190,10 +190,10 @@
                 DioramaCamera.moveForward(&moved, m, view: view)
                 setup[view] = moved
                 let p = Self.pixel(DioramaRenderer.camera(Double(view), hgt, w, h, setup), ground)
-                // down the screen by the drag, to well under a point over a few points' step (off
+                // down the screen by exactly the drag (off
                 // the middle the road also spreads sideways as the camera nears, which no
                 // forward move can undo: only the drag's own direction is followed)
-                #expect(abs(p.y - (y + dy)) < 0.05, "view \(view), pitch \(pitch), start \(start), (\(x), \(y)), dy \(dy)")
+                #expect(abs(p.y - (y + dy)) < 1e-6, "view \(view), pitch \(pitch), start \(start), (\(x), \(y)), dy \(dy) got \(p.y)")
                 checked += 1
               }
             }
@@ -201,6 +201,27 @@
         }
       }
       #expect(checked > 20)
+    }
+
+    /// The picture is aligned to its bottom edge: at any height for a width, everything
+    /// keeps its distance above the bottom edge, the car included, in either view and between.
+    @Test func thePictureKeepsItsBottomEdge() {
+      let hgt = 1.22, pivot = [DioramaRenderer.pivotX, 0, hgt]
+      var set = DioramaCamera.defaults
+      set.road.pitch = 35
+      DioramaCamera.moveForward(&set.road, 5, view: 0)
+      DioramaCamera.zoom(&set.road, to: 2, view: 0)
+      for setup in [DioramaCamera.defaults, set] {
+        for s in [0.0, 0.4, 1.0] {
+          for w in [402.0, 1280] {
+            let gaps = [0.3, 0.5625, 1, 2.2].map { aspect -> Double in
+              let h = w * aspect
+              return h - Self.pixel(DioramaRenderer.camera(s, hgt, w, h, setup), pivot).y
+            }
+            #expect(gaps.allSatisfy { abs($0 - gaps[0]) < 1e-6 }, "s \(s), w \(w): \(gaps)")
+          }
+        }
+      }
     }
 
     @Test func morePitchIsHigher() {
