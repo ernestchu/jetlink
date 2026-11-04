@@ -553,7 +553,7 @@ def test_a_touch_drag_pulls_the_road_along_under_the_fingers():
       return c.cy + c.f * d[2] / d[0];
     };
     for (const [view, s] of [['road', 0], ['bird', 1]]) for (const pitch of [10, 40, 75]) for (const fwd of [-20, 0, 15])
-      for (const [x, y] of [[640, 650], [300, 600], [900, 500]]) for (const dy of [-3, 3]) {
+      for (const [x, y] of [[640, 650], [300, 600], [900, 500]]) for (const dy of [-40, -3, 3, 40]) {
         const n = R.defaultCamera();
         n[view].pitch = pitch;
         R.moveForwardBy(n, view, fwd);
@@ -572,4 +572,24 @@ def test_a_touch_drag_pulls_the_road_along_under_the_fingers():
   followed = [v for v in got if v]
   assert len(followed) > len(got) / 2
   for v in followed:
-    assert v['got'] == pytest.approx(v['want'], abs=0.05)
+    assert v['got'] == pytest.approx(v['want'], abs=1e-6)
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node runs the page renderer')
+def test_the_picture_keeps_its_bottom_edge_whatever_its_height():
+  got = renderer("""
+    const E = globalThis.DioramaEngine, P = [(E.EGO_FRONT + E.EGO_REAR) / 2, 0, 1.22], out = [];
+    const gap = (n, s, w, h) => {  // the car's middle above the bottom edge
+      const c = R.Renderer.prototype.camera.call({ views: n }, s, 1.22, w, h), v = P.map((p, i) => p - c.C[i]);
+      const d = [0, 1, 2].map((i) => c.M[3 * i] * v[0] + c.M[3 * i + 1] * v[1] + c.M[3 * i + 2] * v[2]);
+      return h - (c.cy + c.f * d[2] / d[0]);
+    };
+    const set = R.defaultCamera();
+    set.road.pitch = 30; R.zoomView(set, 'road', 0.8); R.moveForward(set, 'road', -30);
+    set.bird.pitch = 55; R.zoomView(set, 'bird', 1.3);
+    for (const n of [R.defaultCamera(), set]) for (const w of [402, 1280]) for (const s of [0, 0.4, 1])
+      out.push([0.3, 0.5625, 1, 2.2].map((aspect) => gap(n, s, w, w * aspect)));
+    console.log(JSON.stringify(out));
+  """)
+  for gaps in got:
+    assert gaps == pytest.approx([gaps[1]] * len(gaps), abs=1e-6)  # the same gap at every height

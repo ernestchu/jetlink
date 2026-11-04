@@ -147,8 +147,10 @@ void main() {
   // perspective stretches it less near the edge of the picture. Zoom keeps the car where the first views drew it.
   const PIVOT_X = (EGO_FRONT + EGO_REAR) / 2, BACK = 2.2;
   const VIEWS = {
-    road: { first: { eye: [EGO_REAR - 6.5, 3.2], at: [18, 0], zoom: 0.62 }, cy: 0.42 },
-    bird: { first: { eye: [-14, 30], at: [10, 0], zoom: 0.69 }, cy: 0.5 },
+    // the picture hangs from its bottom edge: the principal point this many widths above it (the first views' 42%
+    // and 50% of the height at 16:9), so a taller picture only adds what is ahead, and sky, at the top
+    road: { first: { eye: [EGO_REAR - 6.5, 3.2], at: [18, 0], zoom: 0.62 }, aboveBottom: (1 - 0.42) * 9 / 16 },
+    bird: { first: { eye: [-14, 30], at: [10, 0], zoom: 0.69 }, aboveBottom: (1 - 0.5) * 9 / 16 },
   };
   for (const v of Object.values(VIEWS)) {
     const { eye, at, zoom } = v.first, d = [(BACK - 1) * (eye[0] - PIVOT_X), (BACK - 1) * eye[1]];
@@ -355,7 +357,7 @@ void main() {
       const f = (n.road.zoom * (1 - s) + n.bird.zoom * s) * w;
       // each view's picture moved by its shift; between them, the car goes straight from where one draws it to where
       // the other does (unless a camera is past it: then the shift is blended)
-      const c0 = (v) => VIEWS[v].cy * h + n[v].shift * w;
+      const c0 = (v) => h - VIEWS[v].aboveBottom * w + n[v].shift * w;
       let cy = c0('road') * (1 - s) + c0('bird') * s;
       if (s > 0 && s < 1) {
         const d = carSlope(C, M, hgt), dr = carSlope(Cc, Mc, hgt), db = carSlope(Cb, Mb, hgt);
@@ -629,9 +631,12 @@ void main() {
     if (!(dir[2] > 1e-9)) return null;
     const t = (hgt - c.C[2]) / dir[2];
     if (!(t > 0) || t * Math.hypot(...dir) > 400) return null;
-    // the road point at q = t [1, a, b] in the camera; moving m along road x takes it to q - m R x
-    const r = [M[0], M[3], M[6]], rate = c.f * (t * b * r[0] - r[2] * t) / (t * t);  // d(row)/dm
-    return Math.abs(rate) > 1e-6 ? dy / rate : null;
+    // the road point at q = t [1, a, b] in the camera; moving m along road x takes it to q - m R x, which lands on
+    // the row y + dy when (q2 - m r2) / (q0 - m r0) is that row's slope
+    const r = [M[0], M[3], M[6]], q = [t, t * a, t * b], slope = (y + dy - c.cy) / c.f, den = r[2] - slope * r[0];
+    if (Math.abs(den) < 1e-9) return null;
+    const m = (q[2] - slope * q[0]) / den;
+    return q[0] - m * r[0] > 1e-3 ? m : null;  // and still in front of the camera
   }
   root.DioramaRender = { Renderer, THEMES, CAMERA_NUMBERS, defaultCamera, readCamera, moveForward, moveForwardBy, forwardFollowing, zoomView, previewScene, CAMERA_VIEWS: VIEWS, CAMERA_BACK: BACK };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

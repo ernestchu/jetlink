@@ -98,6 +98,11 @@ diorama-render.js), three of them set by hand:
 - **Shift:** how far down the picture is moved, in image widths. Only zoom
   changes it.
 
+The picture hangs from its bottom edge: each view's principal point sits a set
+number of widths above it (the first views' 42% and 50% of the height at 16:9),
+so at a given width everything keeps its distance above the bottom, and a
+taller picture only adds what is ahead, and sky, at the top.
+
 There are no limits; only zoom has to stay above zero. Pitch past 90° takes the
 camera over the car to look back down at it, and below 0° under the road.
 
