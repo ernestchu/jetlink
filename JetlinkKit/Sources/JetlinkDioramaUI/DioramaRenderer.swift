@@ -73,6 +73,30 @@
       return car[0] > 1e-6 ? car[2] / car[0] : nil
     }
 
+    /// How many metres forward to move a view's camera so the road under (x, y), in a
+    /// picture w × h, moves `dy` down the screen: what makes a drag pull the road along
+    /// under the fingers. Nil where there is no road under them (above the horizon, or
+    /// too far off to follow).
+    public static func metresFollowing(_ v: View, view: Int, dy: Double, x: Double, y: Double, w: Double, h: Double) -> Double? {
+      let hgt = DioramaRenderer.preview.height
+      var setup = defaults
+      setup[view] = v
+      let cam = DioramaRenderer.camera(Double(view), hgt, w, h, setup)
+      // the ray through (x, y), in the road frame (z down), to the road
+      let ray = Diorama.m3vec(DioramaRenderer.transpose3(cam.rotation), [1, (x - cam.cx) / cam.f, (y - cam.cy) / cam.f])
+      guard ray[2] > 1e-9 else { return nil }
+      let t = (hgt - cam.center[2]) / ray[2]
+      guard t > 0, t < 400 else { return nil }
+      // the point in the camera's frame (forward, right, down), and how it moves as the camera
+      // goes m forward: it comes m nearer along the road's x, the camera's first column
+      let q = Diorama.m3vec(cam.rotation, [t * ray[0], t * ray[1], t * ray[2]])
+      let r = [cam.rotation[0], cam.rotation[3], cam.rotation[6]]
+      // its row is f·q₂/q₀ + cy; d(row)/dm with q(m) = q − m·r
+      let rate = cam.f * (q[2] * r[0] - r[2] * q[0]) / (q[0] * q[0])
+      guard abs(rate) > 1e-6 else { return nil }
+      return dy / rate
+    }
+
     /// Zooms a view about the ego car: the picture moves so the car keeps its pixel. No
     /// limit but the one there has to be: a focal length above zero.
     public static func zoom(_ v: inout View, to zoom: Double, view: Int) {

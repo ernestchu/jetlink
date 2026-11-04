@@ -166,6 +166,43 @@
       }
     }
 
+    /// A drag moves the camera just so far that the road under the finger follows it.
+    @Test func forwardDragsTheRoadUnderTheFinger() throws {
+      let hgt = DioramaRenderer.preview.height, w = 402.0, h = 640.0
+      var checked = 0
+      for view in 0...1 {
+        for pitch in [DioramaCamera.defaults[view].pitch, 35, 60] {
+          for start in [0.0, 6, -8] {
+            var v = DioramaCamera.defaults[view]
+            v.pitch = pitch
+            DioramaCamera.moveForward(&v, start, view: view)
+            for (x, y) in [(201.0, 600.0), (120, 450), (300, 520)] {
+              for dy in [3.0, -3] {
+                var setup = DioramaCamera.defaults
+                setup[view] = v
+                let cam = DioramaRenderer.camera(Double(view), hgt, w, h, setup)
+                // the road point under (x, y)
+                let ray = Diorama.m3vec(DioramaRenderer.transpose3(cam.rotation), [1, (x - cam.cx) / cam.f, (y - cam.cy) / cam.f])
+                guard ray[2] > 0, let m = DioramaCamera.metresFollowing(v, view: view, dy: dy, x: x, y: y, w: w, h: h) else { continue }
+                let t = (hgt - cam.center[2]) / ray[2]
+                let ground = (0..<3).map { cam.center[$0] + t * ray[$0] }
+                var moved = v
+                DioramaCamera.moveForward(&moved, m, view: view)
+                setup[view] = moved
+                let p = Self.pixel(DioramaRenderer.camera(Double(view), hgt, w, h, setup), ground)
+                // down the screen by the drag, to well under a point over a few points' step (off
+                // the middle the road also spreads sideways as the camera nears, which no
+                // forward move can undo: only the drag's own direction is followed)
+                #expect(abs(p.y - (y + dy)) < 0.05, "view \(view), pitch \(pitch), start \(start), (\(x), \(y)), dy \(dy)")
+                checked += 1
+              }
+            }
+          }
+        }
+      }
+      #expect(checked > 20)
+    }
+
     @Test func morePitchIsHigher() {
       var setup = DioramaCamera.defaults
       setup.road.pitch += 20

@@ -114,6 +114,18 @@
     static func forward(_ v: inout DioramaCamera.View, down dy: Double, view: Int) {
       DioramaCamera.moveForward(&v, dy * 0.005 * DioramaCamera.distance(view: view), view: view)
     }
+    /// Moved `dy` points down the screen at `at`, in a view `size` big: forward just as far
+    /// as keeps the road under the fingers with them, as if dragging the road itself; the
+    /// fixed rate where there is no road under them.
+    static func forward(_ v: inout DioramaCamera.View, down dy: Double, at: CGPoint, in size: CGSize, view: Int) {
+      if let m = DioramaCamera.metresFollowing(
+        v, view: view, dy: dy, x: Double(at.x), y: Double(at.y), w: Double(size.width), h: Double(size.height))
+      {
+        DioramaCamera.moveForward(&v, m, view: view)
+      } else {
+        forward(&v, down: dy, view: view)
+      }
+    }
   }
 
   /// The camera's gestures over the scene, from a trackpad, a mouse or a touchscreen.
@@ -244,11 +256,15 @@
           change { DioramaCameraGesture.pitch(&$0, dragDown: dy) }
         }
 
+        /// Two fingers, a trackpad's scroll or a right-drag: the road under them follows them.
         @objc func forward(_ g: UIPanGestureRecognizer) {
           let dy = Double(g.translation(in: g.view).y)
           g.setTranslation(.zero, in: g.view)
+          // where the fingers were before this step, the road there the one to move
+          let at = g.location(in: g.view), size = g.view?.bounds.size ?? .zero
+          let before = CGPoint(x: at.x, y: at.y - dy)
           let view = view
-          change { DioramaCameraGesture.forward(&$0, down: dy, view: view) }
+          change { DioramaCameraGesture.forward(&$0, down: dy, at: before, in: size, view: view) }
         }
 
         /// The wheel turned up scrolls the content down, a positive translation.
