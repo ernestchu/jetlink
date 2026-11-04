@@ -30,6 +30,25 @@
       }
     }
 
+    @Test("/diorama/diorama-camera.json is the camera file as it is now, and not found without one")
+    func dioramaCamera() throws {
+      let dir = FileManager.default.temporaryDirectory.appending(path: "page-camera-\(UUID().uuidString)")
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let file = dir.appending(path: "diorama-camera.json")
+      let page = try RunningPage(dioramaCamera: file), without = try RunningPage()
+      #expect(try Client.get(without.port, "/diorama/diorama-camera.json").hasPrefix("HTTP/1.1 404 Not Found\r\n"))
+      #expect(try Client.get(page.port, "/diorama/diorama-camera.json").hasPrefix("HTTP/1.1 404 Not Found\r\n"))
+      for camera in [#"{"road":{"zoom":0.8}}"#, #"{"bird":{"pitch":50}}"#] {
+        try Data(camera.utf8).write(to: file)
+        let reply = try Client.get(page.port, "/diorama/diorama-camera.json")
+        #expect(reply.hasPrefix("HTTP/1.1 200 OK\r\n"))
+        #expect(reply.contains("Content-Type: application/json\r\n"))
+        #expect(reply.contains("Cache-Control: no-store\r\n"))
+        #expect(reply.hasSuffix("\r\n\r\n" + camera))
+      }
+    }
+
     @Test("/logs is the last 300 lines of the log")
     func logs() throws {
       let lines = (1...350).map { "line \($0)" }

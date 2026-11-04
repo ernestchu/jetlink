@@ -30,8 +30,14 @@
 	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_jetlink-diorama._tcp</string>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License. Copyright 2026 Zeph Leggett.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Jetlink shows the drive's Diorama on your iPhone nearby.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticTermination</key>

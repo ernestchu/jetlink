@@ -31,11 +31,12 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_jetlink._tcp</string>
+		<string>_jetlink-diorama._tcp</string>
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License. Copyright 2026 Zeph Leggett.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Jetlink connects to your comma over the USB cable.</string>
+	<string>Jetlink connects to your comma over the USB cable, and finds your Mac to show its Diorama.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

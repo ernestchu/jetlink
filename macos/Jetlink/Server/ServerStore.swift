@@ -1,6 +1,9 @@
 import Foundation
+import JetlinkDiorama
+import JetlinkDioramaUI
 import JetlinkKit
 import JetlinkORT
+import JetlinkRegistry
 import JetlinkServer
 import Observation
 import os
@@ -63,6 +66,12 @@ final class ServerStore: ServerControlling {
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var logStream: LogStream?
   @ObservationIgnored private var logTask: Task<Void, Never>?
+  /// Diorama's stage on the running server's frames, when its models are there.
+  private(set) var diorama: DioramaStage?
+  /// The stage, for the Diorama view's page.
+  private(set) var dioramaFeed: StageFeed?
+  /// Why there is no stage, for the Diorama view.
+  private(set) var dioramaProblem: String?
 
   init(settings: AppSettings, logs: LogBuffer, logFile: LogFileWriter? = LogFileWriter(), isLive: Bool = true) {
     self.settings = settings
@@ -78,6 +87,12 @@ final class ServerStore: ServerControlling {
       sleepAssertion.startObservingPowerSource()
       // stopped, so this clears a lid flag a crashed run left set
       updateSleepAssertion()
+      dioramaDownloads.finished = { [weak self] in
+        // on the running server at once: no restart
+        if let self, let embedded = self.embedded, self.diorama == nil { self.attachDiorama(embedded) }
+      }
+      watchDioramaShare()
+      watchDioramaRate()
     }
   }
 
@@ -125,6 +140,7 @@ final class ServerStore: ServerControlling {
       case .success(let embedded):
         self.embedded = embedded
         self.info = seed
+        self.attachDiorama(embedded)
         self.consumeTask = Task { [weak self] in
           for await event in embedded.events {
             self?.apply(event)
@@ -167,7 +183,103 @@ final class ServerStore: ServerControlling {
     runState = .stopped
   }
 
+  /// Diorama on the server's frames: its models on the GPU, as native CoreML
+  /// programs where the folder has them (ONNX through onnxruntime's CoreML
+  /// provider otherwise), the Neural Engine left to the driving model. They
+  /// run only while the Diorama view is open.
+  private func attachDiorama(_ embedded: EmbeddedServer) {
+    let folder = settings.dioramaFolder
+    let engines = settings.cacheDirectory.appending(path: "diorama", directoryHint: .isDirectory)
+    do {
+      let models = try DioramaStage.Models(folder: folder, coreml: true)
+      var limits = DioramaStage.Limits()
+      (limits.segEvery, limits.inFlight) = Self.dioramaRate(everyFrame: settings.dioramaEveryFrame)
+      let stage = DioramaStage(
+        models: models, limits: limits,
+        makeEngine: DioramaStage.coreMLFactory(cache: engines) { onnx, name, _ in
+          try OrtBackend.sideEngine(model: onnx, cache: engines.appending(path: "coreml-\(name)", directoryHint: .isDirectory))
+        })
+      stage.start()
+      embedded.server.host.frameObserver = stage
+      diorama = stage
+      dioramaFeed = StageFeed(stage: stage)
+      dioramaProblem = nil
+      broadcaster?.setStage(stage)
+    } catch {
+      dioramaProblem = "\(error)"
+    }
+  }
+
+  /// 20 Hz, two at once, or 10 Hz, one at a time.
+  private static func dioramaRate(everyFrame: Bool) -> (segEvery: UInt32, inFlight: Int) {
+    everyFrame ? DioramaStage.Limits.everyFrame : (DioramaStage.Limits().segEvery, DioramaStage.Limits().inFlight)
+  }
+
+  /// The segmentation's rate follows the setting while the server runs.
+  private func watchDioramaRate() {
+    withObservationTracking {
+      let rate = Self.dioramaRate(everyFrame: settings.dioramaEveryFrame)
+      diorama?.segment(every: rate.segEvery, inFlight: rate.inFlight)
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.watchDioramaRate() }
+    }
+  }
+
+  // MARK: Diorama's models
+
+  /// The models' download, for the Diorama view; once they are in, the
+  /// running server picks them up.
+  let dioramaDownloads = DioramaDownloads()
+
+  // MARK: Diorama on iPhones nearby
+
+  /// The iPhones watching, while Settings has Diorama shown on them.
+  private(set) var dioramaViewers: [DioramaBroadcaster.Viewer] = []
+  /// Why iPhones cannot find the Mac, when the listener did not start.
+  private(set) var dioramaShareProblem: String?
+  @ObservationIgnored private var broadcaster: DioramaBroadcaster?
+
+  /// Advertises while the setting is on, whether or not the server runs: an
+  /// iPhone that finds the Mac waits there for the comma.
+  private func watchDioramaShare() {
+    withObservationTracking {
+      updateDioramaShare(settings.dioramaShare)
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.watchDioramaShare() }
+    }
+  }
+
+  /// Every iPhone watching is let go; each may connect again.
+  func disconnectDioramaViewers() {
+    broadcaster?.dropViewers()
+  }
+
+  private func updateDioramaShare(_ on: Bool) {
+    if on, broadcaster == nil {
+      let broadcaster = DioramaBroadcaster()
+      broadcaster.onChange = { [weak self] viewers in Task { @MainActor in self?.dioramaViewers = viewers } }
+      do {
+        try broadcaster.start()
+        broadcaster.setStage(diorama)
+        self.broadcaster = broadcaster
+        dioramaShareProblem = nil
+      } catch {
+        dioramaShareProblem = "\(error)"
+        log.error("Diorama cannot be shown on iPhones nearby: \(error, privacy: .public)")
+      }
+    } else if !on, let broadcaster {
+      broadcaster.stop()
+      self.broadcaster = nil
+      dioramaViewers = []
+    }
+  }
+
   private func tearDown() {
+    embedded?.server.host.frameObserver = nil
+    broadcaster?.setStage(nil)
+    diorama?.stop()
+    diorama = nil
+    dioramaFeed = nil
     embedded = nil
     consumeTask?.cancel()
     consumeTask = nil

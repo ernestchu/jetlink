@@ -46,6 +46,9 @@ final class AppSettings {
     static let startServerOnLaunch = "startServerOnLaunch"
     static let keepAwakeWhileServing = "keepAwakeWhileServing"
     static let keepAwakeLidClosed = "keepAwakeLidClosed"
+    static let dioramaFolder = "dioramaFolder"
+    static let dioramaShare = "dioramaShare"
+    static let dioramaEveryFrame = "dioramaEveryFrame"
   }
 
   @ObservationIgnored private let defaults: UserDefaults
@@ -76,6 +79,24 @@ final class AppSettings {
     didSet { defaults.set(keepAwakeLidClosed, forKey: Key.keepAwakeLidClosed) }
   }
 
+  /// Diorama's models, as `python -m diorama export` writes them. Read
+  /// when the server starts.
+  var dioramaFolder: URL {
+    didSet { defaults.set(dioramaFolder.path(percentEncoded: false), forKey: Key.dioramaFolder) }
+  }
+
+  /// Diorama shown on iPhones nearby, peer to peer: the Mac advertises it
+  /// while this is on, and runs the models while one watches.
+  var dioramaShare: Bool {
+    didSet { defaults.set(dioramaShare, forKey: Key.dioramaShare) }
+  }
+
+  /// Segment every frame (20 Hz), two at once on the GPU, instead of every
+  /// other frame (10 Hz): about twice the GPU time and the model's memory.
+  var dioramaEveryFrame: Bool {
+    didSet { defaults.set(dioramaEveryFrame, forKey: Key.dioramaEveryFrame) }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
@@ -96,6 +117,13 @@ final class AppSettings {
     startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) == nil ? true : defaults.bool(forKey: Key.startServerOnLaunch)
     keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) == nil ? true : defaults.bool(forKey: Key.keepAwakeWhileServing)
     keepAwakeLidClosed = defaults.bool(forKey: Key.keepAwakeLidClosed)
+    if let stored = defaults.string(forKey: Key.dioramaFolder), !stored.isEmpty {
+      dioramaFolder = URL(filePath: stored)
+    } else {
+      dioramaFolder = AppSettings.applicationSupportDirectory.appending(path: "diorama")
+    }
+    dioramaShare = defaults.bool(forKey: Key.dioramaShare)
+    dioramaEveryFrame = defaults.bool(forKey: Key.dioramaEveryFrame)
   }
 
   nonisolated static let defaultTCPPort = 5599

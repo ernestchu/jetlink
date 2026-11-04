@@ -1,3 +1,4 @@
+import JetlinkDioramaUI
 import JetlinkKit
 import JetlinkORT
 import JetlinkUI
@@ -9,6 +10,7 @@ struct SettingsScreen: View {
   @State private var portText = ""
   @State private var versionTaps = 0
   @State private var path: [Destination] = SettingsScreen.initialPath
+  @State private var settingCamera = false
 
   enum Destination: Hashable {
     case logs, connect
@@ -52,6 +54,14 @@ struct SettingsScreen: View {
         } footer: {
           Text("Jetlink has to stay open while you drive.")
         }
+        Section {
+          Toggle("Run Diorama on This \(ThisDevice.name)", isOn: $settings.dioramaOnPhone)
+          Button("Set Up Camera…") { settingCamera = true }
+        } header: {
+          Text("Diorama")
+        } footer: {
+          Text(DioramaOnPhone.cost)
+        }
         storage
         help
         about
@@ -66,6 +76,11 @@ struct SettingsScreen: View {
         case .logs: LogsScreen()
         case .connect: ConnectHelpScreen()
         }
+      }
+      .sheet(isPresented: $settingCamera) {
+        DioramaCameraSetup()
+          .interactiveDismissDisabled()
+          .presentationDetents([.large])
       }
       .onAppear { portText = String(settings.port) }
       .onChange(of: settings.device) { app.server.restart() }

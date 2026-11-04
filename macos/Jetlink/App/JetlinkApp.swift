@@ -1,4 +1,5 @@
 import AppKit
+import JetlinkDioramaUI
 import SwiftUI
 
 @main
@@ -33,6 +34,13 @@ struct JetlinkApp: App {
         .accessibilityLabel("Jetlink")
     }
     .menuBarExtraStyle(.menu)
+
+    // Diorama's camera, set from Settings: a window of its own, since a sheet does not show the Metal view
+    Window("Diorama Camera", id: DioramaCameraWindow.id) {
+      DioramaCameraWindow()
+    }
+    .windowResizability(.contentMinSize)
+    .defaultSize(width: 860, height: 620)
 
     Settings {
       SettingsView()
@@ -90,6 +98,8 @@ struct AppCommands: Commands {
         .keyboardShortcut("3", modifiers: .command)
       Button("Logs") { navigation.selection = .logs }
         .keyboardShortcut("4", modifiers: .command)
+      Button("Diorama") { navigation.selection = .diorama }
+        .keyboardShortcut("5", modifiers: .command)
     }
     CommandMenu("Server") {
       Button("Start Server") { appState.server.start() }
@@ -123,5 +133,15 @@ struct AppCommands: Commands {
       return URL(fileURLWithPath: cache)
     }
     return appState.settings.cacheDirectory
+  }
+}
+
+/// Each Diorama view's camera, over a still scene of its own.
+struct DioramaCameraWindow: View {
+  static let id = "diorama-camera"
+
+  var body: some View {
+    DioramaCameraSetup()
+      .frame(minWidth: 640, minHeight: 480)
   }
 }

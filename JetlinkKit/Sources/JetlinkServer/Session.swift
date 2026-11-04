@@ -254,6 +254,7 @@ final class Session: @unchecked Sendable {
     host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     host.lock.unlock()
     log.info("hello from \(self.who) (seq \(message.seq))")
+    host.frameObserver?.cameraCalibrated(CameraCalibration(hello: hello?["camera"]))
     return hello
   }
 
@@ -383,6 +384,7 @@ final class Session: @unchecked Sendable {
       return
     }
     let reply = infer(loaded, message)
+    let spec = loaded.spec
     host.lock.unlock()
 
     let state: Data? = reply.wantsState ? host.telemetry.json() : nil
@@ -409,6 +411,14 @@ final class Session: @unchecked Sendable {
       )
     }
     host.frameStats.record(totalUs: reply.totalUs, gpuUs: reply.gpuUs, queueUs: reply.queueUs, sendUs: sendUs)
+    if reply.status == .ok, let observer = host.frameObserver {
+      // after the reply: whatever watches the drive never delays the comma
+      let narrow = UnsafeRawBufferPointer(start: message.payload.baseAddress! + Wire.inferReqSize, count: spec.warpedBytes / 2)
+      let wide = UnsafeRawBufferPointer(start: narrow.baseAddress! + narrow.count, count: spec.warpedBytes / 2)
+      observer.frameServed(
+        frameID: reply.frameID, narrow: narrow, wide: wide, outputs: UnsafeBufferPointer(start: outputBuffer, count: reply.outputCount),
+        spec: spec, totalUs: reply.totalUs)
+    }
   }
 
   /// What an INFER_RESP says; the outputs are in `outputBuffer`.

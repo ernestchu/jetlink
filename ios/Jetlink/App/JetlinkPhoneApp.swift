@@ -28,14 +28,16 @@ struct JetlinkPhoneApp: App {
         .onChange(of: app.settings.keepScreenOn) { updateIdleTimer() }
         .onChange(of: app.network.addresses) { app.retryCatalogIfEmpty() }
         .onChange(of: app.server.runState) { updateIdleTimer() }
+        .onChange(of: app.dioramaShown) { updateIdleTimer() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in app.server.shutdown() }
     }
   }
 
   /// The screen stays on while the server runs and Jetlink is in front: a
   /// locked iPhone or iPad suspends the app, and the comma loses the big model.
+  /// It stays on too while the Diorama tab shows the drive, in a car mount.
   private func updateIdleTimer() {
     UIApplication.shared.isIdleTimerDisabled =
-      app.settings.keepScreenOn && app.server.runState == .serving && scenePhase == .active
+      scenePhase == .active && (app.dioramaShown || (app.settings.keepScreenOn && app.server.runState == .serving))
   }
 }

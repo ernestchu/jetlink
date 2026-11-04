@@ -118,6 +118,7 @@ public final class EngineHost: @unchecked Sendable {
   var lastSeenAt: TimeInterval = 0
   private var warmFailed = false
   let frameStats = FrameStats()
+  let observerBox = ObserverBox()
   let log = ServerLog(category: "server")
 
   private var lastProgress: TimeInterval = 0

@@ -1,5 +1,6 @@
 #if canImport(Darwin) || canImport(Glibc)
   import Foundation
+  import JetlinkDiorama
   import JetlinkKit
   import JetlinkLog
   import JetlinkServer
@@ -68,6 +69,10 @@
     private var connections = 0
     private var detach: (() -> Void)?
     private var controller: ServerController?
+    /// Diorama's stage, when the server runs it: `/diorama/` draws the drive from its messages.
+    private let diorama: DioramaStage?
+    /// The page's diorama-camera.json, read on each request: `python -m diorama camera` writes it.
+    private let dioramaCamera: URL?
 
     /// The page on every address at `port` (0: any free port), fed by
     /// `controller`, signed in with `auth`'s file and changing `system`.
@@ -75,9 +80,12 @@
     /// why it cannot listen.
     public static func start(
       port: Int, controller: ServerController, version: String, hardware: (any PageHardwareSource)?, auth: WebAuth? = nil,
-      system: (any PageSystem)? = nil
+      system: (any PageSystem)? = nil, diorama: DioramaStage? = nil, dioramaCamera: URL? = nil
     ) throws -> PageServer {
-      let server = try PageServer(port: port, page: StatusPage.page(), feed: PageFeed(hardware: hardware), auth: auth, system: system) {
+      let server = try PageServer(
+        port: port, page: StatusPage.page(), feed: PageFeed(hardware: hardware), auth: auth, system: system, diorama: diorama,
+        dioramaCamera: dioramaCamera
+      ) {
         LogRing.shared.lines()
       }
       server.watch(controller, version: version)
@@ -85,8 +93,8 @@
     }
 
     init(
-      port: Int, page: Data, feed: PageFeed, auth: WebAuth? = nil, system: (any PageSystem)? = nil, headerTimeout: TimeInterval = 30,
-      keepalive: TimeInterval = 15, logs: @escaping @Sendable () -> [String]
+      port: Int, page: Data, feed: PageFeed, auth: WebAuth? = nil, system: (any PageSystem)? = nil, diorama: DioramaStage? = nil,
+      dioramaCamera: URL? = nil, headerTimeout: TimeInterval = 30, keepalive: TimeInterval = 15, logs: @escaping @Sendable () -> [String]
     ) throws {
       guard let port = UInt16(exactly: port) else { throw HostError.invalid("\(port) is not a port") }
       // IPv6 with IPv4 mapped in, since a phone may resolve the Jetson's name
@@ -102,6 +110,8 @@
       self.logs = logs
       self.auth = auth
       self.system = system
+      self.diorama = diorama
+      self.dioramaCamera = dioramaCamera
       threads = 1
       PageThread.start("jetlink-page") { [self] in acceptLoop() }
     }
@@ -222,6 +232,22 @@
         guard mayWatch else { return PageServer.signInFirst }
         stream(client)
         return nil
+      case ("GET", "/diorama"):
+        return PageResponse.whole(301, type: "text/plain", body: Data(), headers: [("Location", "/diorama/")])
+      case ("GET", "/diorama/events"), ("GET", "/diorama/events/frames"):
+        guard mayWatch else { return PageServer.signInFirst }
+        // .../frames: the frames the models see as well, for the page's Model input view
+        dioramaStream(client, input: head.path.hasSuffix("/frames"))
+        return nil
+      case ("GET", let path) where path.hasPrefix("/diorama/"):
+        let name = path == "/diorama/" ? "diorama.html" : String(path.dropFirst("/diorama/".count))
+        if name == "diorama-camera.json" {
+          // none: the page draws with its own camera
+          guard let url = dioramaCamera, let data = try? Data(contentsOf: url) else { return PageResponse.text(404, "not found\n") }
+          return PageResponse.whole(200, type: "application/json", body: data, cache: "no-store")
+        }
+        guard let file = DioramaPage.file(name) else { return PageResponse.text(404, "not found\n") }
+        return PageResponse.whole(200, type: file.type, body: file.data)
       case ("GET", "/logs"):
         guard mayWatch else { return PageServer.signInFirst }
         let lines = logs().suffix(PageServer.logLines)
@@ -495,6 +521,33 @@
       while let frames = feed.next(stream, timeout: keepalive) {
         if peerClosed(client) { return }
         guard write(client, frames.isEmpty ? PageFeed.keepalive : Data(frames.joined())) else { return }
+      }
+    }
+
+    /// Diorama's messages as Server-Sent Events, each base64 in a `data:`
+    /// line. Without a stage, one `off` event says why, and the stream ends.
+    private func dioramaStream(_ client: Int32, input: Bool = false) {
+      guard let diorama else {
+        let off = "event: off\ndata: Diorama is off on this server. Start jetlink-server with --diorama and the models' folder.\n\n"
+        _ = write(client, PageResponse.head(200, type: "text/event-stream") + Data(off.utf8))
+        return
+      }
+      let watcher = diorama.watch(input: input)
+      defer { diorama.unwatch(watcher) }
+      guard write(client, PageResponse.head(200, type: "text/event-stream") + Data("retry: 2000\n\n".utf8)) else { return }
+      while let messages = diorama.next(watcher, timeout: keepalive) {
+        if peerClosed(client) { return }
+        if messages.isEmpty {
+          guard write(client, PageFeed.keepalive) else { return }
+          continue
+        }
+        var out = Data()
+        for m in messages {
+          out.append(contentsOf: "data: ".utf8)
+          out.append(m.base64EncodedData())
+          out.append(contentsOf: "\n\n".utf8)
+        }
+        guard write(client, out) else { return }
       }
     }
 

@@ -46,6 +46,8 @@ let package = Package(
     .library(name: "JetlinkServer", targets: ["JetlinkServer"]),
     .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
     .library(name: "JetlinkLiteRT", targets: ["JetlinkLiteRT"]),
+    .library(name: "JetlinkDiorama", targets: ["JetlinkDiorama"]),
+    .library(name: "JetlinkDioramaUI", targets: ["JetlinkDioramaUI"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
     .executable(name: "jetlink-server", targets: ["jetlink-server"]),
   ],
@@ -106,12 +108,25 @@ let package = Package(
       dependencies: [
         "JetlinkKit", "JetlinkLog", "JetlinkServer", "JetlinkStatusPage", .target(name: "CUsbfs", condition: .when(platforms: linux)),
       ]),
+    // Diorama: the models on the frames a server answers, the page that draws
+    // the drive, and the scene the apps draw it from.
+    // Optimised in a debug build too, as JetlinkDioramaUI is: the scene steps
+    // the road map cell by cell at 20 Hz, about 50 times slower unoptimised.
+    .target(
+      name: "JetlinkDiorama", dependencies: ["JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")],
+      swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
+    // The scene drawn in Metal, its feeds and the models' download, for the Mac
+    // and iPhone apps alike; it compiles to nothing where there is no SwiftUI.
+    .target(
+      name: "JetlinkDioramaUI", dependencies: ["JetlinkDiorama", "JetlinkRegistry", "JetlinkServer"],
+      swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
     // CryptoExtras for PBKDF2, on every platform: CommonCrypto's on Apple's,
     // BoringSSL's elsewhere.
     .target(
       name: "JetlinkStatusPage",
       dependencies: [
-        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", crypto, .product(name: "CryptoExtras", package: "swift-crypto"),
+        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkDiorama", crypto,
+        .product(name: "CryptoExtras", package: "swift-crypto"),
       ], resources: [.copy("Resources")]),
     .target(
       name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT"],
@@ -120,7 +135,7 @@ let package = Package(
     .executableTarget(
       name: "jetlink-server",
       dependencies: [
-        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT", "JetlinkStatusPage",
+        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT", "JetlinkStatusPage", "JetlinkDiorama",
         .target(name: "JetlinkTRT", condition: .when(platforms: [.linux])),
         .target(name: "JetlinkLinux", condition: .when(platforms: [.linux])),
         .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
@@ -147,6 +162,10 @@ let package = Package(
       ],
       exclude: ["Fixtures"]),
     .testTarget(name: "JetlinkStatusPageTests", dependencies: ["JetlinkStatusPage", "JetlinkKit", "JetlinkServer", "JetlinkTestSupport"]),
+    // The packets against diorama/packets.py's bytes, and the stage on a fake engine.
+    .testTarget(name: "JetlinkDioramaTests", dependencies: ["JetlinkDiorama", "JetlinkServer", "JetlinkTestSupport"], resources: [.copy("Fixtures")]),
+    // The apps' Diorama camera: its defaults against the camera before it could be set, and what pitch and dolly keep.
+    .testTarget(name: "JetlinkDioramaUITests", dependencies: ["JetlinkDioramaUI", "JetlinkDiorama"]),
     // jetlink-server's commands in process, and the built binary for what
     // only a process shows (--version beside a VERSION file, SIGTERM).
     .testTarget(

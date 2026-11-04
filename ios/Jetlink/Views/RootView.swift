@@ -2,12 +2,12 @@ import JetlinkKit
 import JetlinkUI
 import SwiftUI
 
-/// Four tabs: Status, Models, Benchmark and Settings. Away from Status, the state rides
+/// Five tabs: Status, Diorama, Models, Benchmark and Settings. Away from Status, the state rides
 /// along in a pill above the tab bar, the way Music keeps what is playing in
 /// view, and a tap on it goes back.
 struct RootView: View {
   enum Tab: Hashable {
-    case status, models, benchmark, settings
+    case status, diorama, models, benchmark, settings
   }
 
   @Environment(AppModel.self) private var app
@@ -18,6 +18,9 @@ struct RootView: View {
     TabView(selection: $tab) {
       SwiftUI.Tab("Status", systemImage: "gauge.with.needle.fill", value: .status) {
         StatusScreen(tab: $tab)
+      }
+      SwiftUI.Tab("Diorama", systemImage: "cube.transparent.fill", value: .diorama) {
+        DioramaScreen()
       }
       SwiftUI.Tab("Models", systemImage: "shippingbox.fill", value: .models) {
         ModelsScreen()
@@ -30,7 +33,8 @@ struct RootView: View {
       }
     }
     .tabBarMinimizeBehavior(.onScrollDown)
-    .tabViewBottomAccessory(isEnabled: tab != .status) {
+    // the drive fills the screen in a car mount: no pill over it
+    .tabViewBottomAccessory(isEnabled: tab != .status && tab != .diorama) {
       StatusAccessory(state: app.status)
         .onTapGesture { tab = .status }
     }
@@ -45,11 +49,12 @@ struct RootView: View {
     }
   }
 
-  /// `-tab models`, `-tab benchmark`, `-tab settings`, `-tab logs` or
+  /// `-tab diorama`, `-tab models`, `-tab benchmark`, `-tab settings`, `-tab logs` or
   /// `-tab connect` on the command line opens there, for screenshots from
   /// the simulator.
   static var initialTab: Tab {
     switch UserDefaults.standard.string(forKey: "tab") {
+    case "diorama": .diorama
     case "models": .models
     case "benchmark": .benchmark
     case "settings", "logs", "connect": .settings

@@ -21,6 +21,7 @@ struct GeneralSettingsView: View {
   @Environment(ServerStore.self) private var server
   @Environment(UpdateStore.self) private var updates
   @State private var loginItem = LoginItem()
+  @Environment(\.openWindow) private var openWindow
 
   var body: some View {
     @Bindable var settings = settings
@@ -74,6 +75,54 @@ struct GeneralSettingsView: View {
         }
       }
 
+      Section("Diorama") {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(settings.dioramaFolder.path(percentEncoded: false))
+            .font(.system(.callout, design: .monospaced))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+          HStack {
+            Button("Choose…") { chooseDioramaFolder() }
+            Button("Show in Finder") {
+              NSWorkspace.shared.activateFileViewerSelecting([settings.dioramaFolder])
+            }
+          }
+          Text(
+            "The models Diorama draws the drive with: downloaded from the Diorama view, or as `python -m diorama export` writes them. They run on the GPU only while the Diorama view is open, or an iPhone watches. A folder chosen here takes effect when the server restarts."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle("Segment every frame (20 Hz)", isOn: $settings.dioramaEveryFrame)
+          Text(
+            "Runs the segmentation model on every frame, two at once on the GPU, instead of every other frame (10 Hz). The road and the lead follow the drive more closely, but the GPU stays nearly fully busy while Diorama is shown, and the model takes twice the memory. Needs a GPU that keeps up, as an M5 Pro's does."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          LabeledContent("Camera") {
+            Button("Set Up Camera…") { openWindow(id: DioramaCameraWindow.id) }
+          }
+          Text("Where each view, the road view and the bird's-eye, looks at the car from.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle("Show on iPhones nearby", isOn: $settings.dioramaShare)
+          Text(
+            "An iPhone with Jetlink can watch the drive in its Diorama tab, over Wi-Fi peer to peer: it needs no network in common with the Mac, so it can be joined to the car for CarPlay. Any iPhone nearby running Jetlink can watch while this is on; the Diorama view lists them."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
       Section("Updates") {
         if updates.isAvailable {
           Toggle("Check for updates automatically", isOn: $updates.automaticallyChecks)
@@ -104,6 +153,18 @@ struct GeneralSettingsView: View {
   private var needsRestart: Bool {
     guard server.runState == .serving, let running = server.info?.cache else { return false }
     return running != settings.cacheDirectory.path(percentEncoded: false)
+  }
+
+  private func chooseDioramaFolder() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.allowsMultipleSelection = false
+    panel.directoryURL = settings.dioramaFolder
+    panel.prompt = "Choose"
+    if panel.runModal() == .OK, let url = panel.url {
+      settings.dioramaFolder = url
+    }
   }
 
   private func chooseCacheDirectory() {

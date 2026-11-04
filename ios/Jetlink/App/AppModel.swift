@@ -1,6 +1,8 @@
 import Foundation
+import JetlinkDioramaUI
 import JetlinkKit
 import Observation
+import UIKit
 
 /// The composition root. One of these exists for the life of the app.
 @MainActor
@@ -12,6 +14,10 @@ final class AppModel {
   let device: DeviceMonitor
   let network: NetworkInterfaces
   let localNetwork: LocalNetworkAccess
+  /// The drive from a Mac nearby, for the Diorama tab.
+  let dioramaRemote: DioramaRemote
+  /// The Diorama tab is on screen: the screen stays on while it is.
+  var dioramaShown = false
   /// Whether the scene is in front. A suspended app serves nothing, so the
   /// Status tab says so as soon as the scene is not active.
   var sceneActive = true
@@ -27,6 +33,7 @@ final class AppModel {
     self.device = DeviceMonitor()
     self.network = network
     self.localNetwork = LocalNetworkAccess()
+    self.dioramaRemote = DioramaRemote(name: UIDevice.current.name, preferred: settings.dioramaMac)
     device.warn = { [weak server] in server?.note(.warning, $0) }
   }
 

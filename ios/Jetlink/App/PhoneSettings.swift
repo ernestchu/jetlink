@@ -46,6 +46,23 @@ final class PhoneSettings {
     didSet { defaults.set(keepScreenOn, forKey: Keys.keepScreenOn) }
   }
 
+  /// Diorama's model on this iPhone, beside the driving model, while the
+  /// Diorama tab shows it. Off until the user turns it on: it costs heat,
+  /// battery and GPU time the driving model shares.
+  var dioramaOnPhone: Bool {
+    didSet { defaults.set(dioramaOnPhone, forKey: Keys.dioramaOnPhone) }
+  }
+
+  /// Where the Diorama tab's drive comes from.
+  var dioramaSource: DioramaSource {
+    didSet { defaults.set(dioramaSource.rawValue, forKey: Keys.dioramaSource) }
+  }
+
+  /// The Mac the Diorama tab last watched, watched again when it is found.
+  var dioramaMac: String? {
+    didSet { defaults.set(dioramaMac, forKey: Keys.dioramaMac) }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     let port = defaults.integer(forKey: Keys.port)
@@ -55,6 +72,14 @@ final class PhoneSettings {
     self.keepGPUAwake = defaults.object(forKey: Keys.keepGPUAwake) as? Bool ?? true
     self.keepCPUWarm = defaults.object(forKey: Keys.keepCPUWarm) as? Bool ?? true
     self.keepScreenOn = defaults.object(forKey: Keys.keepScreenOn) as? Bool ?? true
+    self.dioramaOnPhone = defaults.bool(forKey: Keys.dioramaOnPhone)
+    self.dioramaSource = defaults.string(forKey: Keys.dioramaSource).flatMap(DioramaSource.init(rawValue:)) ?? .mac
+    self.dioramaMac = defaults.string(forKey: Keys.dioramaMac)
+  }
+
+  /// Diorama's models, out of iCloud backups: Application Support, as the cache is.
+  static var dioramaFolder: URL {
+    URL.applicationSupportDirectory.appending(path: "Jetlink/diorama", directoryHint: .isDirectory)
   }
 
   /// Where models and prepared engines live. Application Support, not Caches:
@@ -71,7 +96,16 @@ final class PhoneSettings {
     static let keepGPUAwake = "keepGPUAwake"
     static let keepCPUWarm = "keepCPUWarm"
     static let keepScreenOn = "keepScreenOn"
+    static let dioramaOnPhone = "dioramaOnPhone"
+    static let dioramaSource = "dioramaSource"
+    static let dioramaMac = "dioramaMac"
   }
+}
+
+/// The Diorama tab's two ways: watch a Mac that runs the comma and the
+/// models, or run the models here on this iPhone's own server.
+enum DioramaSource: String, CaseIterable {
+  case mac, phone
 }
 
 extension OrtProfile {
